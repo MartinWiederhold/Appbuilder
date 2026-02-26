@@ -1,142 +1,90 @@
-import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+
+type AgentLogPayload = string;
 
 export default function App() {
-  const [projectName, setProjectName] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [logs, setLogs] = useState<string[]>(["Flutter Builder • Ready"]);
-  const [busy, setBusy] = useState(false);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [running, setRunning] = useState(false);
 
-  function append(line: string) {
-    setLogs((p) => [...p, line]);
-  }
+  const logText = useMemo(() => logs.join("\n"), [logs]);
 
   useEffect(() => {
-    let unlistenLog: null | (() => void) = null;
-    let unlistenDone: null | (() => void) = null;
-
-    (async () => {
-      unlistenLog = await listen<string>("agent:log", (event) => {
-        append(event.payload);
-      });
-
-      unlistenDone = await listen<string>("agent:done", (event) => {
-        append(`✅ Agent finished (${event.payload}).`);
-        setBusy(false);
-      });
-    })();
+    const unlistenPromises = [
+      listen<AgentLogPayload>("agent:log", (event) => {
+        setLogs((prev) => [...prev, String(event.payload)]);
+      }),
+      listen<string>("agent:done", (event) => {
+        setLogs((prev) => [...prev, `\n[done] ${String(event.payload)}`]);
+        setRunning(false);
+      }),
+    ];
 
     return () => {
-      if (unlistenLog) unlistenLog();
-      if (unlistenDone) unlistenDone();
+      unlistenPromises.forEach(async (p) => {
+        try {
+          const unlisten = await p;
+          unlisten();
+        } catch {
+          // ignore
+        }
+      });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+  async function onRun() {
+    if (running) return;
+    setLogs([]);
+    setRunning(true);
 
-  async function runAgent() {
-    if (busy) return;
-
-    const name = projectName.trim();
-    if (!name) {
-      append("⚠️ Please enter a project name first.");
-      return;
-    }
-
-    setBusy(true);
-    append(`▶️ Starting agent for project: ${name}`);
-
-    try {
-      await invoke("run_agent_stream", { projectName: name, prompt });
-    } catch (e: any) {
-      append("❌ Failed to start agent.");
-      append(String(e));
-      setBusy(false);
-    }
+    await invoke("run_agent_stream", { prompt });
   }
 
   return (
-    <div style={{ height: "100vh", display: "grid", gridTemplateColumns: "1.2fr 1fr" }}>
-      <div style={{ padding: 16 }}>
-        <h2 style={{ margin: 0 }}>Flutter Builder</h2>
-        <p style={{ opacity: 0.75, marginTop: 6 }}>BMAD Phase 1.6 — Live Log Streaming</p>
-
-        <div style={{ marginTop: 12, fontWeight: 600 }}>Project name</div>
+    <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto 1fr", gap: 12, padding: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
-          value={projectName}
-          onChange={(e) => setProjectName(e.target.value)}
-          placeholder='z.B. "todo_app3"'
-          style={{
-            width: "100%",
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(255,255,255,0.04)",
-            color: "inherit",
-            outline: "none",
-          }}
-        />
-
-        <div style={{ marginTop: 12, fontWeight: 600 }}>Prompt</div>
-        <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Beschreibe die App… (wird später genutzt)"
-          style={{
-            width: "100%",
-            height: 220,
-            resize: "vertical",
-            padding: 12,
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(255,255,255,0.04)",
-            color: "inherit",
-            outline: "none",
-          }}
+          placeholder="Beschreibe die App… (Phase 1.3: nur Dummy)"
+          style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff" }}
         />
-
-        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-          <button onClick={runAgent} disabled={busy}>
-            {busy ? "Running…" : "Create + Analyze (Stream)"}
-          </button>
-          <button
-            onClick={() => {
-              setProjectName("");
-              setPrompt("");
-              setLogs(["Flutter Builder • Ready"]);
-            }}
-            disabled={busy}
-          >
-            Reset
-          </button>
-        </div>
-      </div>
-
-      <div style={{ padding: 16, borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Logs (live)</div>
-        <div
+        <button
+          onClick={onRun}
+          disabled={running}
           style={{
-            height: "calc(100% - 28px)",
-            overflow: "auto",
-            padding: 12,
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(0,0,0,0.25)",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            fontSize: 12,
-            whiteSpace: "pre-wrap",
+            padding: "10px 14px",
+            borderRadius: 10,
+            border: "1px solid #333",
+            background: running ? "#222" : "#fff",
+            color: running ? "#aaa" : "#000",
+            cursor: running ? "not-allowed" : "pointer",
+            fontWeight: 600,
           }}
         >
-          {logs.join("\n")}
-          <div ref={bottomRef} />
-        </div>
+          {running ? "Running…" : "Run"}
+        </button>
       </div>
+
+      <textarea
+        readOnly
+        value={logText}
+        style={{
+          width: "100%",
+          height: "100%",
+          padding: 12,
+          borderRadius: 12,
+          border: "1px solid #333",
+          background: "#0b0b0b",
+          color: "#d6d6d6",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: 12,
+          lineHeight: 1.4,
+        }}
+      />
     </div>
   );
 }
