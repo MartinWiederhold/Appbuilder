@@ -1,42 +1,56 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::Emitter;
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use std::process::Stdio;
+use tauri::{Emitter, Window};
 
 #[tauri::command]
-fn run_agent_stream(window: tauri::Window, project_name: String, prompt: String) -> Result<(), String> {
-  let mut child = Command::new("node")
-    .arg("../../../packages/agent/index.js")
-    .arg(project_name)
-    .arg(prompt)
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .map_err(|e| format!("Failed to spawn agent: {e}"))?;
+async fn run_agent_stream(window: Window, prompt: String) -> Result<(), String> {
+  // CARGO_MANIFEST_DIR points to .../apps/desktop/src-tauri
+  // Repo root is 3 levels up: src-tauri -> desktop -> apps -> repo_root
+  let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  let repo_root = manifest_dir
+    .parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+    .ok_or("could_not_resolve_repo_root")?
+    .to_path_buf();
 
-  let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
-  let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+  let agent_path = repo_root.join("packages/agent/src/cli.mjs");
+
+  let mut cmd = tokio::process::Command::new("node");
+  cmd.current_dir(&repo_root);
+  cmd.arg(agent_path);
+  cmd.arg("--project").arg("demo_project");
+  cmd.arg("--prompt").arg(prompt);
+
+  cmd.stdout(Stdio::piped());
+  cmd.stderr(Stdio::piped());
+
+  let mut child = cmd.spawn().map_err(|e| format!("spawn_error={e}"))?;
+
+  let stdout = child.stdout.take().ok_or("missing_stdout")?;
+  let stderr = child.stderr.take().ok_or("missing_stderr")?;
 
   let win_out = window.clone();
-  std::thread::spawn(move || {
-    let reader = BufReader::new(stdout);
-    for line in reader.lines().flatten() {
+  let win_err = window.clone();
+
+  tokio::spawn(async move {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut lines = BufReader::new(stdout).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
       let _ = win_out.emit("agent:log", line);
     }
   });
 
-  let win_err = window.clone();
-  std::thread::spawn(move || {
-    let reader = BufReader::new(stderr);
-    for line in reader.lines().flatten() {
-      let _ = win_err.emit("agent:log", format!("STDERR: {line}"));
+  tokio::spawn(async move {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut lines = BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+      let _ = win_err.emit("agent:log", line);
     }
   });
 
-  std::thread::spawn(move || {
-    let status = child.wait();
-    match status {
+  tokio::spawn(async move {
+    match child.wait().await {
       Ok(s) if s.success() => {
         let _ = window.emit("agent:done", "success");
       }
