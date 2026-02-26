@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 type AgentLogPayload = string;
 
 export default function App() {
+  const [project, setProject] = useState("demo_project");
   const [prompt, setPrompt] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
@@ -37,20 +38,32 @@ export default function App() {
 
   async function onRun() {
     if (running) return;
+    const name = project.trim();
+    if (!name) {
+      setLogs(["[ui] please enter a project name"]);
+      return;
+    }
+
     setLogs([]);
     setRunning(true);
 
-    await invoke("run_agent_stream", { prompt });
+    await invoke("run_agent_stream", { project: name, prompt });
   }
 
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto 1fr", gap: 12, padding: 16 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "240px 1fr auto", gap: 8, alignItems: "center" }}>
+        <input
+          value={project}
+          onChange={(e) => setProject(e.target.value)}
+          placeholder="Project name (e.g. todo_app)"
+          style={{ padding: 10, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff" }}
+        />
         <input
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Beschreibe die App… (Phase 1.3: nur Dummy)"
-          style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff" }}
+          placeholder="Beschreibe die App…"
+          style={{ padding: 10, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff" }}
         />
         <button
           onClick={onRun}

@@ -5,7 +5,7 @@ use std::process::Stdio;
 use tauri::{Emitter, Window};
 
 #[tauri::command]
-async fn run_agent_stream(window: Window, prompt: String) -> Result<(), String> {
+async fn run_agent_stream(window: Window, project: String, prompt: String) -> Result<(), String> {
   // CARGO_MANIFEST_DIR points to .../apps/desktop/src-tauri
   // Repo root is 3 levels up: src-tauri -> desktop -> apps -> repo_root
   let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -19,7 +19,7 @@ async fn run_agent_stream(window: Window, prompt: String) -> Result<(), String> 
   let mut cmd = tokio::process::Command::new("node");
   cmd.current_dir(&repo_root);
   cmd.arg(agent_path);
-  cmd.arg("--project").arg("demo_project");
+  cmd.arg("--project").arg(project);
   cmd.arg("--prompt").arg(prompt);
 
   cmd.stdout(Stdio::piped());
