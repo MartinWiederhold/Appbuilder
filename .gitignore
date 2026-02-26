@@ -1,0 +1,9 @@
+node_modules/
+target/
+src-tauri/target/
+workspace/projects/**/build/
+workspace/projects/**/.dart_tool/
+workspace/projects/**/.flutter-plugins
+workspace/projects/**/.flutter-plugins-dependencies
+.DS_Store
+.env
