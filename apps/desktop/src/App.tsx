@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 export default function App() {
+  const [projectName, setProjectName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [logs, setLogs] = useState<string[]>(["Flutter Builder • Ready"]);
   const [busy, setBusy] = useState(false);
@@ -13,11 +14,18 @@ export default function App() {
 
   async function runAgent() {
     if (busy) return;
+
+    const name = projectName.trim();
+    if (!name) {
+      append("⚠️ Please enter a project name first.");
+      return;
+    }
+
     setBusy(true);
-    append("▶️ Running agent…");
+    append(`▶️ Running agent for project: ${name}`);
 
     try {
-      const out = await invoke<string>("run_agent");
+      const out = await invoke<string>("run_agent", { projectName: name, prompt });
       out.split("\n").filter(Boolean).forEach(append);
       append("✅ Agent finished.");
     } catch (e: any) {
@@ -32,7 +40,23 @@ export default function App() {
     <div style={{ height: "100vh", display: "grid", gridTemplateColumns: "1.2fr 1fr" }}>
       <div style={{ padding: 16 }}>
         <h2 style={{ margin: 0 }}>Flutter Builder</h2>
-        <p style={{ opacity: 0.75, marginTop: 6 }}>BMAD Phase 1.4 — Agent MVP</p>
+        <p style={{ opacity: 0.75, marginTop: 6 }}>BMAD Phase 1.5 — Create Flutter Project</p>
+
+        <div style={{ marginTop: 12, fontWeight: 600 }}>Project name</div>
+        <input
+          value={projectName}
+          onChange={(e) => setProjectName(e.target.value)}
+          placeholder='z.B. "todo_app"'
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 12,
+            border: "1px solid rgba(255,255,255,0.12)",
+            background: "rgba(255,255,255,0.04)",
+            color: "inherit",
+            outline: "none",
+          }}
+        />
 
         <div style={{ marginTop: 12, fontWeight: 600 }}>Prompt</div>
         <textarea
@@ -54,10 +78,11 @@ export default function App() {
 
         <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
           <button onClick={runAgent} disabled={busy}>
-            {busy ? "Running…" : "Run Agent"}
+            {busy ? "Running…" : "Create + Analyze"}
           </button>
           <button
             onClick={() => {
+              setProjectName("");
               setPrompt("");
               setLogs(["Flutter Builder • Ready"]);
             }}

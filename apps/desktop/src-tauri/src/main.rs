@@ -3,9 +3,11 @@
 use std::process::Command;
 
 #[tauri::command]
-fn run_agent() -> Result<String, String> {
+fn run_agent(project_name: String, prompt: String) -> Result<String, String> {
   let output = Command::new("node")
     .arg("../../../packages/agent/index.js")
+    .arg(project_name)
+    .arg(prompt)
     .output()
     .map_err(|e| format!("Failed to run agent: {e}"))?;
 
