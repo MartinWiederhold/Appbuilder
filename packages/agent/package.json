@@ -1,17 +1,12 @@
 {
-  "name": "agent",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "name": "@flutter-builder/agent",
+  "private": true,
+  "version": "0.1.0",
   "type": "module",
-  "dependencies": {
-    "execa": "^9.6.1",
-    "zod": "^4.3.6"
+  "bin": {
+    "flutter-builder-agent": "./src/cli.mjs"
+  },
+  "scripts": {
+    "agent:demo": "node ./src/cli.mjs --prompt \"demo\""
   }
 }
