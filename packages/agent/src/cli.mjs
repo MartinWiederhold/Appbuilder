@@ -10,7 +10,7 @@ function getArg(name, fallback = "") {
   return v ?? fallback;
 }
 
-const prompt = getArg("prompt", "");
+const promptRaw = getArg("prompt", "");
 const project = getArg("project", "demo_project");
 
 function log(line) {
@@ -24,13 +24,11 @@ const repoRoot = process.cwd();
 const projectDir = path.join(repoRoot, "workspace", "projects", project);
 
 function sanitizeProjectName(name) {
-  // Flutter package name rules are stricter; we keep folder name as given,
-  // but when creating we pass a safe org + project name.
   return name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
 
 function existsFlutterProject(dir) {
-  return fs.existsSync(path.join(dir, "pubspec.yaml")) && fs.existsSync(path.join(dir, "lib"));
+  return fs.existsSync(path.join(dir, "pubspec.yaml")) && fs.existsSync(path.join(dir, "lib", "main.dart"));
 }
 
 function run(cmd, args, cwd) {
@@ -38,8 +36,15 @@ function run(cmd, args, cwd) {
     log(`$ ${cmd} ${args.join(" ")}`);
     const child = spawn(cmd, args, { cwd, shell: false });
 
-    child.stdout.on("data", (d) => log(String(d).trimEnd()));
-    child.stderr.on("data", (d) => err(String(d).trimEnd()));
+    child.stdout.on("data", (d) => {
+      const s = String(d);
+      // keep multiline chunks readable
+      s.split(/\r?\n/).forEach((line) => line.length && log(line));
+    });
+    child.stderr.on("data", (d) => {
+      const s = String(d);
+      s.split(/\r?\n/).forEach((line) => line.length && err(line));
+    });
 
     child.on("close", (code) => resolve(code ?? 1));
     child.on("error", (e) => {
@@ -49,7 +54,46 @@ function run(cmd, args, cwd) {
   });
 }
 
+function parseTitleFromPrompt(prompt) {
+  const m = prompt.match(/title\s*:\s*(.+)/i);
+  if (m && m[1]) return m[1].trim();
+  // fallback: use prompt as title, clipped
+  const t = prompt.trim().replace(/\s+/g, " ");
+  if (!t) return "Flutter Builder App";
+  return t.length > 32 ? t.slice(0, 32) + "…" : t;
+}
+
+function escapeDartString(s) {
+  // simplest safe for double-quoted dart string
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function patchMainDartTitle(mainDartPath, newTitle) {
+  const src = fs.readFileSync(mainDartPath, "utf8");
+
+  // Replace: title: 'X' OR title: "X"
+  const replaced = src.replace(
+    /title\s*:\s*(['"])(.*?)\1\s*,/m,
+    `title: "${escapeDartString(newTitle)}",`
+  );
+
+  if (replaced === src) {
+    // If no title found, inject into MaterialApp(...)
+    const injected = src.replace(
+      /MaterialApp\s*\(/m,
+      `MaterialApp(\n      title: "${escapeDartString(newTitle)}",`
+    );
+    if (injected === src) return { changed: false, mode: "no_match" };
+    fs.writeFileSync(mainDartPath, injected, "utf8");
+    return { changed: true, mode: "injected" };
+  }
+
+  fs.writeFileSync(mainDartPath, replaced, "utf8");
+  return { changed: true, mode: "replaced" };
+}
+
 async function main() {
+  const prompt = promptRaw;
   log(`[agent] start`);
   log(`[agent] project=${project}`);
   log(`[agent] prompt=${prompt || "(empty)"}`);
@@ -58,7 +102,7 @@ async function main() {
 
   fs.mkdirSync(projectDir, { recursive: true });
 
-  // marker file (keeps Phase 1 behavior)
+  // marker file
   fs.writeFileSync(
     path.join(projectDir, "agent.txt"),
     `project=${project}\nprompt=${prompt}\ncreated_at=${new Date().toISOString()}\n`,
@@ -69,8 +113,7 @@ async function main() {
   if (!existsFlutterProject(projectDir)) {
     const safeName = sanitizeProjectName(project);
     log(`[agent] flutter project not found -> creating (${safeName})`);
-    // create inside existing directory
-    let code = await run("flutter", ["create", "--project-name", safeName, "."], projectDir);
+    const code = await run("flutter", ["create", "--project-name", safeName, "."], projectDir);
     if (code !== 0) {
       err(`[agent] flutter create failed (exit=${code})`);
       process.exit(code);
@@ -78,6 +121,13 @@ async function main() {
   } else {
     log(`[agent] flutter project exists`);
   }
+
+  // Apply prompt → code change (title)
+  const mainDart = path.join(projectDir, "lib", "main.dart");
+  const newTitle = parseTitleFromPrompt(prompt);
+  log(`[agent] applying title="${newTitle}" to lib/main.dart`);
+  const patch = patchMainDartTitle(mainDart, newTitle);
+  log(`[agent] patch_main_dart mode=${patch.mode} changed=${patch.changed}`);
 
   // Pub get
   {
