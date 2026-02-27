@@ -33,10 +33,54 @@ export default function App() {
 
   
   const promptErrors = useMemo(() => validatePrompt(prompt), [prompt]);
+
+  const [runs, setRuns] = useState<RunEntry[]>(() => loadRuns());
+
+
+  useEffect(() => {
+    saveRuns(runs);
+  }, [runs]);
 const PROMPT_TEMPLATES: Record<string, string> = {
     "Todo v1": "feature: todo_v1\ntitle: Todo Pro\nhome_title: Todo Home",
     "Blank": "feature: <feature_name>\ntitle: <App Title>\nhome_title: <Home Title>",
   };
+
+  type RunEntry = {
+    id: string;
+    ts: number;
+    project: string;
+    prompt: string;
+    buildApk: boolean;
+  };
+
+  const RUNS_KEY = "flutter_builder_runs_v1";
+
+  function loadRuns(): RunEntry[] {
+    try {
+      const raw = localStorage.getItem(RUNS_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr.filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveRuns(runs: RunEntry[]) {
+    try {
+      localStorage.setItem(RUNS_KEY, JSON.stringify(runs.slice(0, 50)));
+    } catch {}
+  }
+
+  function formatTs(ts: number) {
+    try {
+      return new Date(ts).toLocaleString();
+    } catch {
+      return String(ts);
+    }
+  }
+
 
   function validatePrompt(p: string): string[] {
     const errs: string[] = [];
@@ -228,7 +272,42 @@ const [logs, setLogs] = useState<string[]>([]);
           </label>
         </div>
 
-        <textarea
+        
+          <div data-testid="run-history" style={{ marginTop: 10, padding: 10, borderRadius: 12, border: "1px solid #222", background: "#0e0e0e" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontWeight: 600 }}>Recent runs</div>
+              <button
+                onClick={() => setRuns((prev) => prev.filter((r) => r.project !== project))}
+                style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff", cursor: "pointer" }}
+              >
+                Clear for project
+              </button>
+            </div>
+
+            {runs.filter((r) => r.project === project).slice(0, 5).length === 0 ? (
+              <div style={{ opacity: 0.7 }}>No runs yet for this project.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {runs.filter((r) => r.project === project).slice(0, 5).map((r) => (
+                  <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", padding: 10, borderRadius: 12, border: "1px solid #222", background: "#0b0b0b" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>{formatTs(r.ts)}</div>
+                      <div style={{ fontSize: 12, opacity: 0.9 }}>{r.buildApk ? "APK: on" : "APK: off"}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        onClick={() => setPrompt(r.prompt)}
+                        style={{ padding: "8px 10px", borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff", cursor: "pointer" }}
+                      >
+                        Use prompt
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+<textarea
           readOnly
           value={logText}
           style={{
