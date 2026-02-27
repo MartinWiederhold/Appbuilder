@@ -41,7 +41,7 @@ function escapeDartString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-// ------- MaterialApp title patch (scoped) + dedupe -------
+// ---------- MaterialApp title patch (scoped) + dedupe ----------
 function setMaterialAppTitle(src, title) {
   const idx = src.search(/MaterialApp\s*\(/m);
   if (idx === -1) return { src, changed: false, mode: "no_materialapp" };
@@ -112,7 +112,7 @@ function dedupeMaterialAppTitle(src) {
   return { src: out, changed: out !== src };
 }
 
-// ------- process runners -------
+// ---------- runners ----------
 function run(cmd, args, cwd) {
   return new Promise((resolve) => {
     log(`$ ${cmd} ${args.join(" ")}`);
@@ -149,7 +149,7 @@ function runCapture(cmd, args, cwd) {
   });
 }
 
-// ------- run.json -------
+// ---------- run.json ----------
 function writeRunJson(payload) {
   fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
 }
@@ -158,10 +158,8 @@ function apkPath(dir) {
   return path.join(dir, "build", "app", "outputs", "flutter-apk", "app-debug.apk");
 }
 
-// ------- feature generator (todo v0) -------
-function ensureDir(p) {
-  fs.mkdirSync(p, { recursive: true });
-}
+// ---------- file helpers ----------
+function ensureDir(p) { fs.mkdirSync(p, { recursive: true }); }
 function writeFileIfChanged(filePath, content) {
   const prev = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
   if (prev === content) return false;
@@ -170,27 +168,134 @@ function writeFileIfChanged(filePath, content) {
   return true;
 }
 
+// ---------- pubspec patch (shared_preferences) ----------
+function ensureSharedPrefs(pubspecPath) {
+  const src0 = fs.readFileSync(pubspecPath, "utf8");
+
+  // already present?
+  if (/^\s*shared_preferences\s*:\s*/m.test(src0)) {
+    return { changed: false, mode: "already" };
+  }
+
+  // Insert under dependencies:
+  const lines = src0.split("\n");
+  const out = [];
+  let inserted = false;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    out.push(ln);
+    if (!inserted && /^dependencies\s*:\s*$/.test(ln.trim())) {
+      // next lines are deps indentation; use two spaces (Flutter default)
+      out.push("  shared_preferences: ^2.3.2");
+      inserted = true;
+    }
+  }
+
+  if (!inserted) {
+    // fallback: append dependencies block
+    out.push("");
+    out.push("dependencies:");
+    out.push("  shared_preferences: ^2.3.2");
+    inserted = true;
+  }
+
+  const src = out.join("\n");
+  if (src !== src0) fs.writeFileSync(pubspecPath, src, "utf8");
+  return { changed: src !== src0, mode: "inserted" };
+}
+
+// ---------- feature detection ----------
 function detectFeature(prompt) {
-  // Explicit: feature: todo
   const f = parseField(prompt, "feature");
   if (f) return f.trim().toLowerCase();
-  // Heuristic: if prompt contains word "todo"
+  if (/\btodo_v1\b/i.test(prompt)) return "todo_v1";
   if (/\btodo\b/i.test(prompt)) return "todo";
   return null;
 }
 
-function genTodoFiles(appTitle) {
-  const todoScreenPath = path.join(projectDir, "lib", "features", "todo", "todo_screen.dart");
-  const mainPath = path.join(projectDir, "lib", "main.dart");
-  const testPath = path.join(projectDir, "test", "widget_test.dart");
+// ---------- generators ----------
+function genMain(appTitle, homeTitle) {
+  return `import 'package:flutter/material.dart';
+import 'features/todo/todo_screen.dart';
 
-  const todoScreen = `import 'package:flutter/material.dart';
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: "${escapeDartString(appTitle)}",
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+      ),
+      home: const TodoScreen(title: "${escapeDartString(homeTitle)}"),
+    );
+  }
+}
+`;
+}
+
+function genTodoRepository() {
+  return `import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 class TodoItem {
   TodoItem({required this.text, this.done = false});
+
   final String text;
-  bool done;
+  final bool done;
+
+  TodoItem copyWith({String? text, bool? done}) => TodoItem(
+        text: text ?? this.text,
+        done: done ?? this.done,
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'text': text,
+        'done': done,
+      };
+
+  static TodoItem fromJson(Map<String, dynamic> json) => TodoItem(
+        text: (json['text'] as String?) ?? '',
+        done: (json['done'] as bool?) ?? false,
+      );
 }
+
+class TodoRepository {
+  static const String _kKey = 'todos_v1';
+
+  Future<List<TodoItem>> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kKey);
+    if (raw == null || raw.isEmpty) {
+    return <TodoItem>[
+      TodoItem(text: 'Erste Aufgabe'),
+      TodoItem(text: 'Zweite Aufgabe'),
+    ];
+  }
+    final list = (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
+    return list.map(TodoItem.fromJson).toList(growable: true);
+  }
+
+  Future<void> save(List<TodoItem> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = jsonEncode(items.map((e) => e.toJson()).toList());
+    await prefs.setString(_kKey, raw);
+  }
+}
+`;
+}
+
+function genTodoScreenV1() {
+  return `import 'package:flutter/material.dart';
+import 'todo_repository.dart';
 
 class TodoScreen extends StatefulWidget {
   const TodoScreen({super.key, required this.title});
@@ -201,10 +306,28 @@ class TodoScreen extends StatefulWidget {
 }
 
 class _TodoScreenState extends State<TodoScreen> {
-  final List<TodoItem> _items = <TodoItem>[
-    TodoItem(text: 'Erste Aufgabe'),
-    TodoItem(text: 'Zweite Aufgabe'),
-  ];
+  final TodoRepository _repo = TodoRepository();
+  List<TodoItem> _items = <TodoItem>[];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final items = await _repo.load();
+    if (!mounted) return;
+    setState(() {
+      _items = items;
+      _loading = false;
+    });
+  }
+
+  Future<void> _persist() async {
+    await _repo.save(_items);
+  }
 
   Future<void> _addTodo() async {
     final controller = TextEditingController();
@@ -227,15 +350,26 @@ class _TodoScreenState extends State<TodoScreen> {
       ),
     );
     if (result == null || result.isEmpty) return;
-    setState(() => _items.insert(0, TodoItem(text: result)));
+
+    setState(() => _items = <TodoItem>[TodoItem(text: result), ..._items]);
+    await _persist();
   }
 
-  void _toggle(int index) {
-    setState(() => _items[index].done = !_items[index].done);
+  Future<void> _toggle(int index) async {
+    final item = _items[index];
+    setState(() {
+      final next = item.copyWith(done: !item.done);
+      _items = List<TodoItem>.of(_items);
+      _items[index] = next;
+    });
+    await _persist();
   }
 
-  void _remove(int index) {
-    setState(() => _items.removeAt(index));
+  Future<void> _remove(int index) async {
+    setState(() {
+      _items = List<TodoItem>.of(_items)..removeAt(index);
+    });
+    await _persist();
   }
 
   @override
@@ -246,113 +380,86 @@ class _TodoScreenState extends State<TodoScreen> {
         onPressed: _addTodo,
         child: const Icon(Icons.add),
       ),
-      body: ListView.separated(
-        padding: const EdgeInsets.all(12),
-        itemCount: _items.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 8),
-        itemBuilder: (context, i) {
-          final item = _items[i];
-          return Dismissible(
-            key: ValueKey(item.text + i.toString()),
-            direction: DismissDirection.endToStart,
-            background: Container(
-              alignment: Alignment.centerRight,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              color: Colors.red.withValues(alpha: 0.8),
-              child: const Icon(Icons.delete, color: Colors.white),
-            ),
-            onDismissed: (_) => _remove(i),
-            child: Material(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(14),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => _toggle(i),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  child: Row(
-                    children: [
-                      Icon(item.done ? Icons.check_circle : Icons.radio_button_unchecked),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          item.text,
-                          style: TextStyle(
-                            fontSize: 16,
-                            decoration: item.done ? TextDecoration.lineThrough : TextDecoration.none,
-                          ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: _items.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (context, i) {
+                final item = _items[i];
+                return Dismissible(
+                  key: ValueKey(item.text + i.toString()),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    color: Colors.red.withValues(alpha: 0.8),
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  onDismissed: (_) => _remove(i),
+                  child: Material(
+                    color: Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => _toggle(i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        child: Row(
+                          children: [
+                            Icon(item.done ? Icons.check_circle : Icons.radio_button_unchecked),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                item.text,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  decoration: item.done ? TextDecoration.lineThrough : TextDecoration.none,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            IconButton(
+                              tooltip: 'Löschen',
+                              onPressed: () => _remove(i),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      IconButton(
-                        tooltip: 'Löschen',
-                        onPressed: () => _remove(i),
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
-          );
-        },
-      ),
     );
   }
 }
 `;
-
-  const mainDart = `import 'package:flutter/material.dart';
-import 'features/todo/todo_screen.dart';
-
-void main() {
-  runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: "${escapeDartString(appTitle)}",
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const TodoScreen(title: "Todo Home"),
-    );
-  }
-}
-`;
-
-  const widgetTest = `import 'package:flutter/material.dart';
+function genWidgetTest(projectName, homeTitle) {
+  return `import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:todo_flutter/main.dart';
+import 'package:${projectName}/main.dart';
 
 void main() {
   testWidgets('Todo app boots', (WidgetTester tester) async {
     await tester.pumpWidget(const MyApp());
-    await tester.pumpAndSettle();
+    await tester.pump();
+    // allow async load (SharedPreferences) + first frame
+    await tester.pump(const Duration(seconds: 1));
 
-    // App bar title should exist.
-    expect(find.text('Todo Home'), findsOneWidget);
-
-    // Floating action button should exist.
+    expect(find.text('${escapeDartString(homeTitle)}'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });
 }
 `;
-
-  return [
-    { file: todoScreenPath, content: todoScreen },
-    { file: mainPath, content: mainDart },
-    { file: testPath, content: widgetTest },
-  ];
 }
 
+// ---------- main ----------
 async function main() {
   const prompt = promptRaw;
   const startedAt = new Date().toISOString();
@@ -385,32 +492,59 @@ async function main() {
       log(`[agent] flutter project exists`);
     }
 
-    // Always ensure MaterialApp title stays aligned with prompt/title
-    const titleFromPrompt = parseField(prompt, "title") ?? fallbackTitle(prompt);
-    const mainDartPath = path.join(projectDir, "lib", "main.dart");
-    const src0 = fs.readFileSync(mainDartPath, "utf8");
-    let src = src0;
-    const d = dedupeMaterialAppTitle(src);
-    src = d.src;
-    const t = setMaterialAppTitle(src, titleFromPrompt);
-    src = t.src;
-    if (src !== src0) fs.writeFileSync(mainDartPath, src, "utf8");
-    log(`[agent] material_title mode=${t.mode} changed=${t.changed} value="${titleFromPrompt}"`);
+    const appTitle = parseField(prompt, "title") ?? fallbackTitle(prompt);
+    const homeTitle = parseField(prompt, "home_title") ?? "Todo Home";
 
-    // Feature generation
+    // keep MaterialApp title aligned (safe even if main.dart later overwritten)
+    const mainDartPath = path.join(projectDir, "lib", "main.dart");
+    if (fs.existsSync(mainDartPath)) {
+      const src0 = fs.readFileSync(mainDartPath, "utf8");
+      let src = src0;
+      const d = dedupeMaterialAppTitle(src);
+      src = d.src;
+      const t = setMaterialAppTitle(src, appTitle);
+      src = t.src;
+      if (src !== src0) fs.writeFileSync(mainDartPath, src, "utf8");
+      log(`[agent] material_title mode=${t.mode} changed=${t.changed} value="${appTitle}"`);
+    }
+
     const feature = detectFeature(prompt);
-    if (feature === "todo") {
-      log(`[agent] feature=todo -> generating files`);
-      const files = genTodoFiles(titleFromPrompt);
+    if (feature === "todo_v1") {
+      log(`[agent] feature=todo_v1 -> generating files + shared_preferences`);
+      const pubspecPath = path.join(projectDir, "pubspec.yaml");
+      const dep = ensureSharedPrefs(pubspecPath);
+      log(`[agent] pubspec shared_preferences ${dep.mode} changed=${dep.changed}`);
+
+      const projectName = sanitizeProjectName(project);
+
+      const files = [
+        {
+          file: path.join(projectDir, "lib", "features", "todo", "todo_repository.dart"),
+          content: genTodoRepository(),
+        },
+        {
+          file: path.join(projectDir, "lib", "features", "todo", "todo_screen.dart"),
+          content: genTodoScreenV1(),
+        },
+        {
+          file: path.join(projectDir, "lib", "main.dart"),
+          content: genMain(appTitle, homeTitle),
+        },
+        {
+          file: path.join(projectDir, "test", "widget_test.dart"),
+          content: genWidgetTest(projectName, homeTitle),
+        },
+      ];
+
       let wrote = 0;
       for (const f of files) {
         const changed = writeFileIfChanged(f.file, f.content);
         log(`[agent] write ${path.relative(projectDir, f.file)} changed=${changed}`);
         if (changed) wrote++;
       }
-      steps.push({ name: "feature_todo_generate", exitCode: 0, wroteFiles: wrote });
+      steps.push({ name: "feature_todo_v1_generate", exitCode: 0, wroteFiles: wrote });
     } else {
-      log(`[agent] feature=none (tip: use "feature: todo")`);
+      log(`[agent] feature not todo_v1 (tip: use "feature: todo_v1")`);
     }
 
     // pub get
