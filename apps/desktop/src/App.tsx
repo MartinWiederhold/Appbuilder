@@ -29,7 +29,19 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [project, setProject] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [logs, setLogs] = useState<string[]>([]);
+  
+
+  const PROMPT_TEMPLATES: Record<string, string> = {
+    "Todo v1": "feature: todo_v1\ntitle: Todo Pro\nhome_title: Todo Home",
+    "Blank": "feature: <feature_name>\ntitle: <App Title>\nhome_title: <Home Title>",
+  };
+
+  function applyTemplate(name: string) {
+    const t = PROMPT_TEMPLATES[name];
+    if (!t) return;
+    setPrompt(t);
+  }
+const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [buildApk, setBuildApk] = useState(false);
 
@@ -129,6 +141,28 @@ export default function App() {
 
       <div style={{ padding: 16, display: "grid", gridTemplateRows: "auto auto 1fr", gap: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+          <div data-testid="prompt-templates" style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+
+            {Object.keys(PROMPT_TEMPLATES).map((name) => (
+
+              <button
+
+                key={name}
+
+                onClick={() => applyTemplate(name)}
+
+                style={{ padding: "8px 10px", borderRadius: 10, border: "1px solid #333", background: "#0f0f0f", color: "#fff", cursor: "pointer" }}
+
+              >
+
+                {name}
+
+              </button>
+
+            ))}
+
+          </div>
+
           <textarea
             value={prompt}
             onChange={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
