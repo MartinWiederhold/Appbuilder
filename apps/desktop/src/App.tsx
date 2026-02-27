@@ -80,8 +80,9 @@ export default function App() {
     if (!project || status === "running") return;
     setLogs([]);
     setStatus("running");
+    console.log("PROMPT_RAW:", JSON.stringify(prompt));
     await invoke("run_agent_stream", { project, prompt, buildApk });
-  }
+}
 
   const active = projects.find((p) => p.name === project);
 
@@ -128,11 +129,12 @@ export default function App() {
 
       <div style={{ padding: 16, display: "grid", gridTemplateRows: "auto auto 1fr", gap: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
-          <input
+          <textarea
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder='z.B. "title: Todo Pro\nhome_title: Todo Home\nappbar_title: Todo Home"'
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff" }}
+            onChange={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
+            placeholder={'feature: todo_v1\ntitle: Todo Pro\nhome_title: Todo Home'}
+            rows={4}
+            style={{ padding: 10, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff", resize: "vertical" }}
           />
           <button
             onClick={onRun}
