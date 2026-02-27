@@ -7,3 +7,6 @@ workspace/projects/**/.flutter-plugins
 workspace/projects/**/.flutter-plugins-dependencies
 .DS_Store
 .env
+
+# BMAD: generated workspace output
+workspace/
