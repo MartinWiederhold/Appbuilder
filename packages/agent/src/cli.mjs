@@ -41,7 +41,7 @@ function escapeDartString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-// MaterialApp-scoped operations + dedupe (from Phase 2.3)
+// MaterialApp-scoped operations + dedupe
 function setMaterialAppTitle(src, title) {
   const idx = src.search(/MaterialApp\s*\(/m);
   if (idx === -1) return { src, changed: false, mode: "no_materialapp" };
@@ -184,8 +184,36 @@ function run(cmd, args, cwd) {
   });
 }
 
+// like run(), but also captures combined output for parsing
+function runCapture(cmd, args, cwd) {
+  return new Promise((resolve) => {
+    log(`$ ${cmd} ${args.join(" ")}`);
+    const child = spawn(cmd, args, { cwd, shell: false });
+
+    let out = "";
+    const onChunk = (d, isErr) => {
+      const s = String(d);
+      out += s;
+      s.split(/\r?\n/).forEach((l) => l.length && (isErr ? err(l) : log(l)));
+    };
+
+    child.stdout.on("data", (d) => onChunk(d, false));
+    child.stderr.on("data", (d) => onChunk(d, true));
+
+    child.on("close", (code) => resolve({ code: code ?? 1, output: out }));
+    child.on("error", (e) => {
+      err(`[spawn_error] ${e}`);
+      resolve({ code: 1, output: out + `\n[spawn_error] ${e}\n` });
+    });
+  });
+}
+
 function writeRunJson(payload) {
   fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
+}
+
+function apkPath(dir) {
+  return path.join(dir, "build", "app", "outputs", "flutter-apk", "app-debug.apk");
 }
 
 async function main() {
@@ -244,9 +272,32 @@ async function main() {
     }
 
     if (doBuildApk) {
+      // Toolchain check (doctor output is informative; doctor exit code isn't always reliable)
+      log(`[agent] checking android toolchain via flutter doctor -v`);
+      const doc = await runCapture("flutter", ["doctor", "-v"], projectDir);
+      steps.push({ name: "flutter_doctor_v", exitCode: doc.code });
+
+      // If doctor explicitly shows Android toolchain as ✗, stop early with a clear hint.
+      // Typical line: "[✗] Android toolchain - develop for Android devices ..."
+      const androidBroken = /\[\s*✗\s*\]\s*Android toolchain/i.test(doc.output);
+      if (androidBroken) {
+        finalExit = 1;
+        err("[agent] Android toolchain is not ready. Fix Flutter doctor issues, then retry with Build APK.");
+        err("[agent] Hint: open terminal and run: flutter doctor -v");
+        throw new Error("android_toolchain_not_ready");
+      }
+
+      log(`[agent] building APK (debug)`);
       const code = await run("flutter", ["build", "apk", "--debug"], projectDir);
       steps.push({ name: "flutter_build_apk_debug", exitCode: code });
       if (code !== 0) { finalExit = code; throw new Error("flutter_build_apk_failed"); }
+
+      const apk = apkPath(projectDir);
+      if (fs.existsSync(apk)) {
+        log(`[agent] apk_ready=${apk}`);
+      } else {
+        err(`[agent] build reported success but apk not found at ${apk}`);
+      }
     }
 
     log(`[agent] done`);
@@ -276,7 +327,15 @@ process.on("SIGINT", () => {
   err("[agent] interrupted (SIGINT)");
   try {
     const now = new Date().toISOString();
-    writeRunJson({ project, status: "failed", exitCode: 130, startedAt: now, finishedAt: now, buildApk: doBuildApk, steps: [{ name: "sigint", exitCode: 130 }] });
+    writeRunJson({
+      project,
+      status: "failed",
+      exitCode: 130,
+      startedAt: now,
+      finishedAt: now,
+      buildApk: doBuildApk,
+      steps: [{ name: "sigint", exitCode: 130 }]
+    });
   } catch {}
   process.exit(130);
 });
