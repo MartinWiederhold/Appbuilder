@@ -4,34 +4,53 @@ use std::{fs, path::PathBuf, process::Stdio};
 use tauri::{Emitter, Window};
 
 fn repo_root() -> PathBuf {
-  // .../apps/desktop/src-tauri
-  let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  // -> .../apps/desktop
-  let desktop = manifest.parent().unwrap();
-  // -> .../apps
-  let apps = desktop.parent().unwrap();
-  // -> repo root
-  apps.parent().unwrap().to_path_buf()
+  let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // .../apps/desktop/src-tauri
+  let desktop = manifest.parent().unwrap();                 // .../apps/desktop
+  let apps = desktop.parent().unwrap();                     // .../apps
+  apps.parent().unwrap().to_path_buf()                      // repo root
+}
+
+#[derive(serde::Serialize)]
+struct ProjectInfo {
+  name: String,
+  last_status: String,        // "success" | "failed" | "never"
+  finished_at: Option<String> // ISO timestamp
 }
 
 #[tauri::command]
-fn list_projects() -> Vec<String> {
+fn list_projects_with_status() -> Vec<ProjectInfo> {
   let root = repo_root().join("workspace/projects");
-  fs::read_dir(root)
-    .map(|rd| {
-      let mut v: Vec<String> = rd
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-      v.sort();
-      v
-    })
-    .unwrap_or_default()
+  let mut out: Vec<ProjectInfo> = Vec::new();
+
+  let rd = match fs::read_dir(root) {
+    Ok(v) => v,
+    Err(_) => return out,
+  };
+
+  for e in rd.flatten() {
+    let p = e.path();
+    if !p.is_dir() { continue; }
+    let name = e.file_name().to_string_lossy().to_string();
+
+    let run_json = p.join("run.json");
+    if let Ok(s) = fs::read_to_string(run_json) {
+      if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+        let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("never").to_string();
+        let finished_at = v.get("finishedAt").and_then(|x| x.as_str()).map(|x| x.to_string());
+        out.push(ProjectInfo { name, last_status: status, finished_at });
+        continue;
+      }
+    }
+
+    out.push(ProjectInfo { name, last_status: "never".to_string(), finished_at: None });
+  }
+
+  out.sort_by(|a, b| a.name.cmp(&b.name));
+  out
 }
 
 #[tauri::command]
-async fn run_agent_stream(window: Window, project: String, prompt: String) -> Result<(), String> {
+async fn run_agent_stream(window: Window, project: String, prompt: String, build_apk: bool) -> Result<(), String> {
   let root = repo_root();
   let agent = root.join("packages/agent/src/cli.mjs");
 
@@ -40,6 +59,7 @@ async fn run_agent_stream(window: Window, project: String, prompt: String) -> Re
     .arg(agent)
     .arg("--project").arg(project)
     .arg("--prompt").arg(prompt)
+    .arg("--build_apk").arg(if build_apk { "1" } else { "0" })
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
 
@@ -75,7 +95,7 @@ async fn run_agent_stream(window: Window, project: String, prompt: String) -> Re
 
 fn main() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![run_agent_stream, list_projects])
+    .invoke_handler(tauri::generate_handler![run_agent_stream, list_projects_with_status])
     .run(tauri::generate_context!())
     .expect("error while running tauri app");
 }

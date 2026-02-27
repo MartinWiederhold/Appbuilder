@@ -27,37 +27,21 @@ function existsFlutterProject(dir) {
   return fs.existsSync(path.join(dir, "pubspec.yaml")) && fs.existsSync(path.join(dir, "lib", "main.dart"));
 }
 
-function run(cmd, args, cwd) {
-  return new Promise((resolve) => {
-    log(`$ ${cmd} ${args.join(" ")}`);
-    const child = spawn(cmd, args, { cwd, shell: false });
-
-    child.stdout.on("data", (d) => String(d).split(/\r?\n/).forEach((l) => l.length && log(l)));
-    child.stderr.on("data", (d) => String(d).split(/\r?\n/).forEach((l) => l.length && err(l)));
-
-    child.on("close", (code) => resolve(code ?? 1));
-    child.on("error", (e) => { err(`[spawn_error] ${e}`); resolve(1); });
-  });
-}
-
 function parseField(prompt, fieldName) {
   const re = new RegExp(`${fieldName}\\s*:\\s*(.+)`, "i");
   const m = prompt.match(re);
   return m && m[1] ? m[1].trim() : null;
 }
-
 function fallbackTitle(prompt) {
   const t = prompt.trim().replace(/\s+/g, " ");
   if (!t) return "Flutter Builder App";
   return t.length > 32 ? t.slice(0, 32) + "…" : t;
 }
-
 function escapeDartString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-// Only operate inside the first MaterialApp(...) argument list.
-// This avoids duplicating/injecting unrelated `title:` occurrences.
+// MaterialApp-scoped operations + dedupe (from Phase 2.3)
 function setMaterialAppTitle(src, title) {
   const idx = src.search(/MaterialApp\s*\(/m);
   if (idx === -1) return { src, changed: false, mode: "no_materialapp" };
@@ -65,7 +49,6 @@ function setMaterialAppTitle(src, title) {
   const before = src.slice(0, idx);
   const rest = src.slice(idx);
 
-  // Find matching closing paren for the first MaterialApp(
   let depth = 0;
   let end = -1;
   for (let i = 0; i < rest.length; i++) {
@@ -81,7 +64,6 @@ function setMaterialAppTitle(src, title) {
   const block = rest.slice(0, end + 1);
   const after = rest.slice(end + 1);
 
-  // Replace existing title in block
   const reTitle = /(^|\n)(\s*)title\s*:\s*(['"])(.*?)\3\s*,/m;
   if (reTitle.test(block)) {
     const rep = block.replace(reTitle, `$1$2title: "${escapeDartString(title)}",`);
@@ -89,34 +71,11 @@ function setMaterialAppTitle(src, title) {
     return { src: out, changed: out !== src, mode: "replaced" };
   }
 
-  // Inject near start of argument list (after MaterialApp()
   const rep = block.replace(/MaterialApp\s*\(\s*/m, `MaterialApp(\n      title: "${escapeDartString(title)}",\n      `);
   const out = before + rep + after;
   return { src: out, changed: out !== src, mode: "injected" };
 }
 
-function replaceMyHomePageTitle(src, title) {
-  const re = /MyHomePage\s*\(\s*title\s*:\s*(['"])(.*?)\1\s*\)/m;
-  if (!re.test(src)) return { src, changed: false, mode: "no_match" };
-  const rep = src.replace(re, `MyHomePage(title: "${escapeDartString(title)}")`);
-  return { src: rep, changed: rep !== src, mode: "replaced" };
-}
-
-function replaceAppBarTitleText(src, title) {
-  const reWidget = /title\s*:\s*Text\s*\(\s*widget\.title\s*\)\s*,/m;
-  if (reWidget.test(src)) {
-    const rep = src.replace(reWidget, `title: Text("${escapeDartString(title)}"),`);
-    return { src: rep, changed: rep !== src, mode: "replaced_widget" };
-  }
-  const reLit = /title\s*:\s*Text\s*\(\s*(['"])(.*?)\1\s*\)\s*,/m;
-  if (reLit.test(src)) {
-    const rep = src.replace(reLit, `title: Text("${escapeDartString(title)}"),`);
-    return { src: rep, changed: rep !== src, mode: "replaced_literal" };
-  }
-  return { src, changed: false, mode: "no_match" };
-}
-
-// One-time cleanup: if we somehow have duplicate `title:` entries inside MaterialApp block, keep the first.
 function dedupeMaterialAppTitle(src) {
   const idx = src.search(/MaterialApp\s*\(/m);
   if (idx === -1) return { src, changed: false };
@@ -153,6 +112,27 @@ function dedupeMaterialAppTitle(src) {
   return { src: out, changed: out !== src };
 }
 
+function replaceMyHomePageTitle(src, title) {
+  const re = /MyHomePage\s*\(\s*title\s*:\s*(['"])(.*?)\1\s*\)/m;
+  if (!re.test(src)) return { src, changed: false, mode: "no_match" };
+  const rep = src.replace(re, `MyHomePage(title: "${escapeDartString(title)}")`);
+  return { src: rep, changed: rep !== src, mode: "replaced" };
+}
+
+function replaceAppBarTitleText(src, title) {
+  const reWidget = /title\s*:\s*Text\s*\(\s*widget\.title\s*\)\s*,/m;
+  if (reWidget.test(src)) {
+    const rep = src.replace(reWidget, `title: Text("${escapeDartString(title)}"),`);
+    return { src: rep, changed: rep !== src, mode: "replaced_widget" };
+  }
+  const reLit = /title\s*:\s*Text\s*\(\s*(['"])(.*?)\1\s*\)\s*,/m;
+  if (reLit.test(src)) {
+    const rep = src.replace(reLit, `title: Text("${escapeDartString(title)}"),`);
+    return { src: rep, changed: rep !== src, mode: "replaced_literal" };
+  }
+  return { src, changed: false, mode: "no_match" };
+}
+
 function applyPatches(mainDartPath, prompt) {
   const src0 = fs.readFileSync(mainDartPath, "utf8");
 
@@ -163,7 +143,6 @@ function applyPatches(mainDartPath, prompt) {
   let src = src0;
   const changes = [];
 
-  // cleanup first (handles your current duplicate state)
   {
     const r = dedupeMaterialAppTitle(src);
     src = r.src;
@@ -192,8 +171,28 @@ function applyPatches(mainDartPath, prompt) {
   return changes;
 }
 
+function run(cmd, args, cwd) {
+  return new Promise((resolve) => {
+    log(`$ ${cmd} ${args.join(" ")}`);
+    const child = spawn(cmd, args, { cwd, shell: false });
+
+    child.stdout.on("data", (d) => String(d).split(/\r?\n/).forEach((l) => l.length && log(l)));
+    child.stderr.on("data", (d) => String(d).split(/\r?\n/).forEach((l) => l.length && err(l)));
+
+    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", (e) => { err(`[spawn_error] ${e}`); resolve(1); });
+  });
+}
+
+function writeRunJson(payload) {
+  fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
+}
+
 async function main() {
   const prompt = promptRaw;
+  const startedAt = new Date().toISOString();
+  const steps = [];
+  let finalExit = 0;
 
   log(`[agent] start`);
   log(`[agent] project=${project}`);
@@ -210,35 +209,75 @@ async function main() {
     "utf8"
   );
 
-  if (!existsFlutterProject(projectDir)) {
-    const safeName = sanitizeProjectName(project);
-    log(`[agent] flutter project not found -> creating (${safeName})`);
-    const code = await run("flutter", ["create", "--project-name", safeName, "."], projectDir);
-    if (code !== 0) { err(`[agent] flutter create failed (exit=${code})`); process.exit(code); }
-  } else {
-    log(`[agent] flutter project exists`);
+  try {
+    if (!existsFlutterProject(projectDir)) {
+      const safeName = sanitizeProjectName(project);
+      log(`[agent] flutter project not found -> creating (${safeName})`);
+      const code = await run("flutter", ["create", "--project-name", safeName, "."], projectDir);
+      steps.push({ name: "flutter_create", exitCode: code });
+      if (code !== 0) { finalExit = code; throw new Error("flutter_create_failed"); }
+    } else {
+      log(`[agent] flutter project exists`);
+    }
+
+    const mainDart = path.join(projectDir, "lib", "main.dart");
+    log(`[agent] applying prompt patches to lib/main.dart`);
+    const changes = applyPatches(mainDart, prompt);
+    changes.forEach((c) => log(`[agent] patch ${c.patch} mode=${c.mode} changed=${c.changed} value="${c.value}"`));
+
+    {
+      const code = await run("flutter", ["pub", "get"], projectDir);
+      steps.push({ name: "flutter_pub_get", exitCode: code });
+      if (code !== 0) { finalExit = code; throw new Error("flutter_pub_get_failed"); }
+    }
+
+    {
+      const code = await run("flutter", ["analyze"], projectDir);
+      steps.push({ name: "flutter_analyze", exitCode: code });
+      if (code !== 0) { finalExit = code; throw new Error("flutter_analyze_failed"); }
+    }
+
+    {
+      const code = await run("flutter", ["test"], projectDir);
+      steps.push({ name: "flutter_test", exitCode: code });
+      if (code !== 0) { finalExit = code; throw new Error("flutter_test_failed"); }
+    }
+
+    if (doBuildApk) {
+      const code = await run("flutter", ["build", "apk", "--debug"], projectDir);
+      steps.push({ name: "flutter_build_apk_debug", exitCode: code });
+      if (code !== 0) { finalExit = code; throw new Error("flutter_build_apk_failed"); }
+    }
+
+    log(`[agent] done`);
+    finalExit = 0;
+  } catch (e) {
+    if (finalExit === 0) finalExit = 1;
+    err(`[agent] failed: ${e?.message || e}`);
+  } finally {
+    const finishedAt = new Date().toISOString();
+    const status = finalExit === 0 ? "success" : "failed";
+    writeRunJson({
+      project,
+      status,
+      exitCode: finalExit,
+      startedAt,
+      finishedAt,
+      buildApk: doBuildApk,
+      steps
+    });
+    log(`[agent] wrote run.json status=${status} exitCode=${finalExit}`);
   }
 
-  const mainDart = path.join(projectDir, "lib", "main.dart");
-  log(`[agent] applying prompt patches to lib/main.dart`);
-  const changes = applyPatches(mainDart, prompt);
-  changes.forEach((c) => log(`[agent] patch ${c.patch} mode=${c.mode} changed=${c.changed} value="${c.value}"`));
-
-  { const code = await run("flutter", ["pub", "get"], projectDir); if (code !== 0) process.exit(code); }
-  { const code = await run("flutter", ["analyze"], projectDir); if (code !== 0) process.exit(code); }
-  { const code = await run("flutter", ["test"], projectDir); if (code !== 0) process.exit(code); }
-
-  if (doBuildApk) {
-    const code = await run("flutter", ["build", "apk", "--debug"], projectDir);
-    if (code !== 0) process.exit(code);
-  }
-
-  log(`[agent] done`);
-  process.exit(0);
+  process.exit(finalExit);
 }
 
 process.on("SIGINT", () => {
   err("[agent] interrupted (SIGINT)");
+  try {
+    const now = new Date().toISOString();
+    writeRunJson({ project, status: "failed", exitCode: 130, startedAt: now, finishedAt: now, buildApk: doBuildApk, steps: [{ name: "sigint", exitCode: 130 }] });
+  } catch {}
   process.exit(130);
 });
 
