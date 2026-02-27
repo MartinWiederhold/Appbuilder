@@ -41,7 +41,7 @@ function escapeDartString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-// MaterialApp-scoped operations + dedupe
+// ------- MaterialApp title patch (scoped) + dedupe -------
 function setMaterialAppTitle(src, title) {
   const idx = src.search(/MaterialApp\s*\(/m);
   if (idx === -1) return { src, changed: false, mode: "no_materialapp" };
@@ -112,65 +112,7 @@ function dedupeMaterialAppTitle(src) {
   return { src: out, changed: out !== src };
 }
 
-function replaceMyHomePageTitle(src, title) {
-  const re = /MyHomePage\s*\(\s*title\s*:\s*(['"])(.*?)\1\s*\)/m;
-  if (!re.test(src)) return { src, changed: false, mode: "no_match" };
-  const rep = src.replace(re, `MyHomePage(title: "${escapeDartString(title)}")`);
-  return { src: rep, changed: rep !== src, mode: "replaced" };
-}
-
-function replaceAppBarTitleText(src, title) {
-  const reWidget = /title\s*:\s*Text\s*\(\s*widget\.title\s*\)\s*,/m;
-  if (reWidget.test(src)) {
-    const rep = src.replace(reWidget, `title: Text("${escapeDartString(title)}"),`);
-    return { src: rep, changed: rep !== src, mode: "replaced_widget" };
-  }
-  const reLit = /title\s*:\s*Text\s*\(\s*(['"])(.*?)\1\s*\)\s*,/m;
-  if (reLit.test(src)) {
-    const rep = src.replace(reLit, `title: Text("${escapeDartString(title)}"),`);
-    return { src: rep, changed: rep !== src, mode: "replaced_literal" };
-  }
-  return { src, changed: false, mode: "no_match" };
-}
-
-function applyPatches(mainDartPath, prompt) {
-  const src0 = fs.readFileSync(mainDartPath, "utf8");
-
-  const materialTitle = parseField(prompt, "title") ?? fallbackTitle(prompt);
-  const homeTitle = parseField(prompt, "home_title");
-  const appBarTitle = parseField(prompt, "appbar_title");
-
-  let src = src0;
-  const changes = [];
-
-  {
-    const r = dedupeMaterialAppTitle(src);
-    src = r.src;
-    if (r.changed) changes.push({ patch: "dedupe_material_title", mode: "cleanup", changed: true, value: "" });
-  }
-
-  {
-    const r = setMaterialAppTitle(src, materialTitle);
-    src = r.src;
-    changes.push({ patch: "material_title", mode: r.mode, changed: r.changed, value: materialTitle });
-  }
-
-  if (homeTitle) {
-    const r = replaceMyHomePageTitle(src, homeTitle);
-    src = r.src;
-    changes.push({ patch: "home_title", mode: r.mode, changed: r.changed, value: homeTitle });
-  }
-
-  if (appBarTitle) {
-    const r = replaceAppBarTitleText(src, appBarTitle);
-    src = r.src;
-    changes.push({ patch: "appbar_title", mode: r.mode, changed: r.changed, value: appBarTitle });
-  }
-
-  if (src !== src0) fs.writeFileSync(mainDartPath, src, "utf8");
-  return changes;
-}
-
+// ------- process runners -------
 function run(cmd, args, cwd) {
   return new Promise((resolve) => {
     log(`$ ${cmd} ${args.join(" ")}`);
@@ -184,7 +126,6 @@ function run(cmd, args, cwd) {
   });
 }
 
-// like run(), but also captures combined output for parsing
 function runCapture(cmd, args, cwd) {
   return new Promise((resolve) => {
     log(`$ ${cmd} ${args.join(" ")}`);
@@ -208,12 +149,208 @@ function runCapture(cmd, args, cwd) {
   });
 }
 
+// ------- run.json -------
 function writeRunJson(payload) {
   fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
 }
 
 function apkPath(dir) {
   return path.join(dir, "build", "app", "outputs", "flutter-apk", "app-debug.apk");
+}
+
+// ------- feature generator (todo v0) -------
+function ensureDir(p) {
+  fs.mkdirSync(p, { recursive: true });
+}
+function writeFileIfChanged(filePath, content) {
+  const prev = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  if (prev === content) return false;
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, content, "utf8");
+  return true;
+}
+
+function detectFeature(prompt) {
+  // Explicit: feature: todo
+  const f = parseField(prompt, "feature");
+  if (f) return f.trim().toLowerCase();
+  // Heuristic: if prompt contains word "todo"
+  if (/\btodo\b/i.test(prompt)) return "todo";
+  return null;
+}
+
+function genTodoFiles(appTitle) {
+  const todoScreenPath = path.join(projectDir, "lib", "features", "todo", "todo_screen.dart");
+  const mainPath = path.join(projectDir, "lib", "main.dart");
+  const testPath = path.join(projectDir, "test", "widget_test.dart");
+
+  const todoScreen = `import 'package:flutter/material.dart';
+
+class TodoItem {
+  TodoItem({required this.text, this.done = false});
+  final String text;
+  bool done;
+}
+
+class TodoScreen extends StatefulWidget {
+  const TodoScreen({super.key, required this.title});
+  final String title;
+
+  @override
+  State<TodoScreen> createState() => _TodoScreenState();
+}
+
+class _TodoScreenState extends State<TodoScreen> {
+  final List<TodoItem> _items = <TodoItem>[
+    TodoItem(text: 'Erste Aufgabe'),
+    TodoItem(text: 'Zweite Aufgabe'),
+  ];
+
+  Future<void> _addTodo() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Neue Aufgabe'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'z.B. Milch kaufen'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Abbrechen')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Hinzufügen'),
+          ),
+        ],
+      ),
+    );
+    if (result == null || result.isEmpty) return;
+    setState(() => _items.insert(0, TodoItem(text: result)));
+  }
+
+  void _toggle(int index) {
+    setState(() => _items[index].done = !_items[index].done);
+  }
+
+  void _remove(int index) {
+    setState(() => _items.removeAt(index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addTodo,
+        child: const Icon(Icons.add),
+      ),
+      body: ListView.separated(
+        padding: const EdgeInsets.all(12),
+        itemCount: _items.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (context, i) {
+          final item = _items[i];
+          return Dismissible(
+            key: ValueKey(item.text + i.toString()),
+            direction: DismissDirection.endToStart,
+            background: Container(
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              color: Colors.red.withValues(alpha: 0.8),
+              child: const Icon(Icons.delete, color: Colors.white),
+            ),
+            onDismissed: (_) => _remove(i),
+            child: Material(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(14),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _toggle(i),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(
+                    children: [
+                      Icon(item.done ? Icons.check_circle : Icons.radio_button_unchecked),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          item.text,
+                          style: TextStyle(
+                            fontSize: 16,
+                            decoration: item.done ? TextDecoration.lineThrough : TextDecoration.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      IconButton(
+                        tooltip: 'Löschen',
+                        onPressed: () => _remove(i),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+`;
+
+  const mainDart = `import 'package:flutter/material.dart';
+import 'features/todo/todo_screen.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: "${escapeDartString(appTitle)}",
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+      ),
+      home: const TodoScreen(title: "Todo Home"),
+    );
+  }
+}
+`;
+
+  const widgetTest = `import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:todo_flutter/main.dart';
+
+void main() {
+  testWidgets('Todo app boots', (WidgetTester tester) async {
+    await tester.pumpWidget(const MyApp());
+    await tester.pumpAndSettle();
+
+    // App bar title should exist.
+    expect(find.text('Todo Home'), findsOneWidget);
+
+    // Floating action button should exist.
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+}
+`;
+
+  return [
+    { file: todoScreenPath, content: todoScreen },
+    { file: mainPath, content: mainDart },
+    { file: testPath, content: widgetTest },
+  ];
 }
 
 async function main() {
@@ -248,42 +385,66 @@ async function main() {
       log(`[agent] flutter project exists`);
     }
 
-    const mainDart = path.join(projectDir, "lib", "main.dart");
-    log(`[agent] applying prompt patches to lib/main.dart`);
-    const changes = applyPatches(mainDart, prompt);
-    changes.forEach((c) => log(`[agent] patch ${c.patch} mode=${c.mode} changed=${c.changed} value="${c.value}"`));
+    // Always ensure MaterialApp title stays aligned with prompt/title
+    const titleFromPrompt = parseField(prompt, "title") ?? fallbackTitle(prompt);
+    const mainDartPath = path.join(projectDir, "lib", "main.dart");
+    const src0 = fs.readFileSync(mainDartPath, "utf8");
+    let src = src0;
+    const d = dedupeMaterialAppTitle(src);
+    src = d.src;
+    const t = setMaterialAppTitle(src, titleFromPrompt);
+    src = t.src;
+    if (src !== src0) fs.writeFileSync(mainDartPath, src, "utf8");
+    log(`[agent] material_title mode=${t.mode} changed=${t.changed} value="${titleFromPrompt}"`);
 
+    // Feature generation
+    const feature = detectFeature(prompt);
+    if (feature === "todo") {
+      log(`[agent] feature=todo -> generating files`);
+      const files = genTodoFiles(titleFromPrompt);
+      let wrote = 0;
+      for (const f of files) {
+        const changed = writeFileIfChanged(f.file, f.content);
+        log(`[agent] write ${path.relative(projectDir, f.file)} changed=${changed}`);
+        if (changed) wrote++;
+      }
+      steps.push({ name: "feature_todo_generate", exitCode: 0, wroteFiles: wrote });
+    } else {
+      log(`[agent] feature=none (tip: use "feature: todo")`);
+    }
+
+    // pub get
     {
       const code = await run("flutter", ["pub", "get"], projectDir);
       steps.push({ name: "flutter_pub_get", exitCode: code });
       if (code !== 0) { finalExit = code; throw new Error("flutter_pub_get_failed"); }
     }
 
+    // analyze
     {
       const code = await run("flutter", ["analyze"], projectDir);
       steps.push({ name: "flutter_analyze", exitCode: code });
       if (code !== 0) { finalExit = code; throw new Error("flutter_analyze_failed"); }
     }
 
+    // test
     {
       const code = await run("flutter", ["test"], projectDir);
       steps.push({ name: "flutter_test", exitCode: code });
       if (code !== 0) { finalExit = code; throw new Error("flutter_test_failed"); }
     }
 
+    // optional build apk
     if (doBuildApk) {
-      // Toolchain check (doctor output is informative; doctor exit code isn't always reliable)
       log(`[agent] checking android toolchain via flutter doctor -v`);
       const doc = await runCapture("flutter", ["doctor", "-v"], projectDir);
       steps.push({ name: "flutter_doctor_v", exitCode: doc.code });
 
-      // If doctor explicitly shows Android toolchain as ✗, stop early with a clear hint.
-      // Typical line: "[✗] Android toolchain - develop for Android devices ..."
       const androidBroken = /\[\s*✗\s*\]\s*Android toolchain/i.test(doc.output);
       if (androidBroken) {
         finalExit = 1;
         err("[agent] Android toolchain is not ready. Fix Flutter doctor issues, then retry with Build APK.");
-        err("[agent] Hint: open terminal and run: flutter doctor -v");
+        err("[agent] Hint: run: flutter doctor -v");
         throw new Error("android_toolchain_not_ready");
       }
 
@@ -293,11 +454,8 @@ async function main() {
       if (code !== 0) { finalExit = code; throw new Error("flutter_build_apk_failed"); }
 
       const apk = apkPath(projectDir);
-      if (fs.existsSync(apk)) {
-        log(`[agent] apk_ready=${apk}`);
-      } else {
-        err(`[agent] build reported success but apk not found at ${apk}`);
-      }
+      if (fs.existsSync(apk)) log(`[agent] apk_ready=${apk}`);
+      else err(`[agent] build reported success but apk not found at ${apk}`);
     }
 
     log(`[agent] done`);
