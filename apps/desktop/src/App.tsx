@@ -31,10 +31,25 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
   
 
-  const PROMPT_TEMPLATES: Record<string, string> = {
+  
+  const promptErrors = useMemo(() => validatePrompt(prompt), [prompt]);
+const PROMPT_TEMPLATES: Record<string, string> = {
     "Todo v1": "feature: todo_v1\ntitle: Todo Pro\nhome_title: Todo Home",
     "Blank": "feature: <feature_name>\ntitle: <App Title>\nhome_title: <Home Title>",
   };
+
+  function validatePrompt(p: string): string[] {
+    const errs: string[] = [];
+    const lines = p.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const hasFeatureLine = lines.some(l => /^feature:\s*\S+/.test(l));
+    if (!hasFeatureLine) errs.push('Missing required line: "feature: ..."');
+    const first = lines[0] || '';
+    if (lines.length > 0 && !/^feature:\s*\S+/.test(first)) {
+      errs.push('First non-empty line should be: "feature: ..."');
+    }
+    return errs;
+  }
+
 
   function applyTemplate(name: string) {
     const t = PROMPT_TEMPLATES[name];
@@ -162,6 +177,15 @@ const [logs, setLogs] = useState<string[]>([]);
             ))}
 
           </div>
+          {promptErrors.length > 0 && (
+            <div data-testid="prompt-errors" style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid #5a2", background: "#1a1200", color: "#ffd" }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Prompt needs fixes:</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {promptErrors.map((e, i) => (<li key={i}>{e}</li>))}
+              </ul>
+            </div>
+          )}
+
 
           <textarea
             value={prompt}
