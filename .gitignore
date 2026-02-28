@@ -10,3 +10,6 @@ workspace/projects/**/.flutter-plugins-dependencies
 
 # BMAD: generated workspace output
 workspace/
+
+# Local patch backups
+*.bak_*
