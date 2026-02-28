@@ -95,113 +95,27 @@ async fn run_agent_stream(window: Window, project: String, prompt: String, build
 
 
 #[tauri::command]
-
-fn find_repo_root() -> Result<std::path::PathBuf, String> {
-  // 1) walk up from current_dir
-  if let Ok(mut dir) = std::env::current_dir() {
-    for _ in 0..12 {
-      if dir.join("workspace").join("projects").exists() {
-        return Ok(dir);
-      }
-      if !dir.pop() { break; }
-    }
-  }
-
-  // 2) walk up from current_exe (works well for Tauri dev)
-  if let Ok(mut exe) = std::env::current_exe() {
-    // drop filename
-    exe.pop();
-    for _ in 0..15 {
-      if exe.join("workspace").join("projects").exists() {
-        return Ok(exe);
-      }
-      if !exe.pop() { break; }
-    }
-  }
-
-  Err("Could not locate repo root containing workspace/projects".into())
-}
-
-fn run_json_path(project: &str) -> Result<std::path::PathBuf, String> {
-  use std::path::PathBuf;
-
-  fn is_candidate(dir: &PathBuf) -> bool {
-    dir.join("workspace").join("projects").is_dir()
-  }
-
-  fn pick_best_root(mut dir: PathBuf) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    for _ in 0..30 {
-      if is_candidate(&dir) {
-        candidates.push(dir.clone());
-      }
-      if !dir.pop() { break; }
-    }
-
-    if candidates.is_empty() {
-      return None;
-    }
-
-    // Prefer the one that looks like the real repo root (has .git)
-    for c in &candidates {
-      if c.join(".git").is_dir() {
-        return Some(c.clone());
-      }
-    }
-
-    // Otherwise pick the top-most candidate (last one while walking up)
-    Some(candidates.last().unwrap().clone())
-  }
-
-  // Try from current executable directory
-  if let Ok(mut exe) = std::env::current_exe() {
-    exe.pop();
-    if let Some(root) = pick_best_root(exe) {
-      return Ok(root.join("workspace").join("projects").join(project).join("run.json"));
-    }
-  }
-
-  // Fallback: try from current working directory
-  if let Ok(cwd) = std::env::current_dir() {
-    if let Some(root) = pick_best_root(cwd) {
-      return Ok(root.join("workspace").join("projects").join(project).join("run.json"));
-    }
-  }
-
-  Err("Could not locate repo root (workspace/projects)".to_string())
-}
-
-#[tauri::command]
-
 fn read_run_json(project: String) -> Result<String, String> {
-  let path = run_json_path(&project)?;
-  // optional debug:
-  eprintln!("[tauri] read_run_json: {}", path.display());
-
-  std::fs::read_to_string(&path).map_err(|e| format!("read {} failed: {}", path.display(), e))
+  let root = repo_root();
+  let path = root.join("workspace").join("projects").join(project).join("run.json");
+  std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn clear_run_json(project: String) -> Result<(), String> {
-  let path = run_json_path(&project)?;
-  // optional debug:
-  eprintln!("[tauri] clear_run_json: {}", path.display());
-
-  if path.exists() {
-    std::fs::remove_file(&path).map_err(|e| format!("remove {} failed: {}", path.display(), e))?;
+  let root = repo_root();
+  let path = root.join("workspace").join("projects").join(project).join("run.json");
+  match std::fs::remove_file(&path) {
+    Ok(_) => Ok(()),
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    Err(e) => Err(e.to_string()),
   }
-  Ok(())
 }
 
 
 fn main() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![
-    run_agent_stream, list_projects_with_status,
-    read_run_json,
-    clear_run_json
-  ])
+    .invoke_handler(tauri::generate_handler![run_agent_stream, list_projects_with_status])
     .run(tauri::generate_context!())
     .expect("error while running tauri app");
 }
