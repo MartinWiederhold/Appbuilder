@@ -93,6 +93,26 @@ async fn run_agent_stream(window: Window, project: String, prompt: String, build
   Ok(())
 }
 
+
+#[tauri::command]
+fn read_run_json(project: String) -> Result<String, String> {
+  let root = repo_root();
+  let path = root.join("workspace").join("projects").join(project).join("run.json");
+  std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_run_json(project: String) -> Result<(), String> {
+  let root = repo_root();
+  let path = root.join("workspace").join("projects").join(project).join("run.json");
+  match std::fs::remove_file(&path) {
+    Ok(_) => Ok(()),
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    Err(e) => Err(e.to_string()),
+  }
+}
+
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![run_agent_stream, list_projects_with_status])
