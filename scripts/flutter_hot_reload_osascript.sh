@@ -4,18 +4,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="$ROOT/.flutter_live"
 
-if [ ! -f "$STATE/terminal_window_id" ]; then
-  echo "No terminal_window_id. Start flutter via scripts/run_live_flutter.sh first."
-  exit 1
+WIN_ID=""
+if [ -f "$STATE/terminal_window_id" ]; then
+  WIN_ID="$(cat "$STATE/terminal_window_id" || true)"
 fi
 
-WIN_ID="$(cat "$STATE/terminal_window_id")"
-
+# Try to focus recorded window; if it fails, just use front window.
 osascript <<APPLESCRIPT
 tell application "Terminal"
   activate
-  set targetWindow to (first window whose id is ${WIN_ID})
-  set frontmost of targetWindow to true
+  if "${WIN_ID}" is not "" then
+    try
+      set targetWindow to (first window whose id is ${WIN_ID})
+      set frontmost of targetWindow to true
+    on error
+      -- fallback: keep current front window
+    end try
+  end if
 end tell
 tell application "System Events"
   keystroke "r"
@@ -23,5 +28,5 @@ tell application "System Events"
 end tell
 APPLESCRIPT
 
-echo "Hot reload triggered (target window)"
+echo "Hot reload triggered (osascript)"
 exit 0
