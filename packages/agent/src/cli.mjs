@@ -622,24 +622,17 @@ async function main() {
     });
 
     // AUTO_LIVE_TRIGGER (real code, not logged)
-    let liveOk = false;
     try {
       const { execSync } = require("child_process");
       execSync("bash scripts/flutter_hot_reload.sh", { stdio: "inherit" });
       log("[agent] hot reload triggered");
       log("AGENT_STATUS:RELOAD_OK");
-      liveOk = true;
     } catch (e) {
-      liveOk = false;
-    }
-
-    if (!liveOk) {
       try {
         const { execSync } = require("child_process");
         execSync("bash scripts/run_live_flutter.sh", { stdio: "inherit" });
         log("[agent] live flutter started");
         log("AGENT_STATUS:LIVE_STARTED");
-        liveOk = true;
       } catch (e2) {
         err("[agent] live trigger failed");
         log("AGENT_STATUS:LIVE_TRIGGER_FAILED");
