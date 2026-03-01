@@ -16,3 +16,6 @@ workspace/
 
 # runtime
 .live_preview/
+
+# Flutter live run state
+.flutter_live/
