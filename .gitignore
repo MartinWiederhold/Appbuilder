@@ -13,3 +13,6 @@ workspace/
 
 # Local patch backups
 *.bak_*
+
+# runtime
+.live_preview/
