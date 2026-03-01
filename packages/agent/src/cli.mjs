@@ -623,15 +623,13 @@ async function main() {
     // AUTO_LIVE_TRIGGER
     if (finalExit === 0) {
       try {
-        const { execSync } = require("child_process");
-        execSync(`bash "${repoRoot}/scripts/flutter_hot_reload_osascript.sh"`, { stdio: "inherit" });
+execSync(`bash "${repoRoot}/scripts/flutter_hot_reload_osascript.sh"`, { stdio: "inherit" });
         log("[agent] hot reload triggered");
         log("AGENT_STATUS:RELOAD_OK");
       } catch (e) {
         err(`[agent] hot reload failed: ${e?.message || e}`);
         try {
-          const { execSync } = require("child_process");
-          execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh"`, { stdio: "inherit" });
+execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh"`, { stdio: "inherit" });
           log("[agent] live flutter started");
           log("AGENT_STATUS:LIVE_STARTED");
         } catch (e2) {
