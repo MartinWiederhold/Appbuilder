@@ -620,21 +620,23 @@ async function main() {
       steps
     });
 
-    // AUTO_LIVE_TRIGGER (real code, not logged)
-    try {
-      const { execSync } = require("child_process");
-      execSync("bash scripts/flutter_hot_reload.sh", { stdio: "inherit" });
-      log("[agent] hot reload triggered");
-      log("AGENT_STATUS:RELOAD_OK");
-    } catch (e) {
+    // AUTO_LIVE_TRIGGER
+    if (finalExit === 0) {
       try {
         const { execSync } = require("child_process");
-        execSync("bash scripts/run_live_flutter.sh", { stdio: "inherit" });
-        log("[agent] live flutter started");
-        log("AGENT_STATUS:LIVE_STARTED");
-      } catch (e2) {
-        err("[agent] live trigger failed");
-        log("AGENT_STATUS:LIVE_TRIGGER_FAILED");
+        execSync(`bash "${repoRoot}/scripts/flutter_hot_reload.sh"`, { stdio: "inherit" });
+        log("[agent] hot reload triggered");
+        log("AGENT_STATUS:RELOAD_OK");
+      } catch (e) {
+        try {
+          const { execSync } = require("child_process");
+          execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh"`, { stdio: "inherit" });
+          log("[agent] live flutter started");
+          log("AGENT_STATUS:LIVE_STARTED");
+        } catch (e2) {
+          err("[agent] live trigger failed");
+          log("AGENT_STATUS:LIVE_TRIGGER_FAILED");
+        }
       }
     }
 
