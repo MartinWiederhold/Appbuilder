@@ -628,12 +628,14 @@ async function main() {
         log("[agent] hot reload triggered");
         log("AGENT_STATUS:RELOAD_OK");
       } catch (e) {
+        err(`[agent] hot reload failed: ${e?.message || e}`);
         try {
           const { execSync } = require("child_process");
           execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh"`, { stdio: "inherit" });
           log("[agent] live flutter started");
           log("AGENT_STATUS:LIVE_STARTED");
         } catch (e2) {
+          err(`[agent] live start failed: ${e2?.message || e2}`);
           err("[agent] live trigger failed");
           log("AGENT_STATUS:LIVE_TRIGGER_FAILED");
         }
