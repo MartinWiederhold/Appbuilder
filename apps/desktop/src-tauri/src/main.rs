@@ -289,17 +289,36 @@ fn start_live_preview() {
         .spawn();
 }
 
+#[tauri::command]
+async fn start_live_flutter() -> Result<(), String> {
+  let root = repo_root();
+  let script = root.join("scripts/open_live_flutter_terminal.sh");
+
+  let mut cmd = std::process::Command::new("bash");
+  cmd.arg(script)
+    .current_dir(&root)
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+
+  cmd.spawn().map_err(|e| format!("start_live_flutter failed: {e}"))?;
+  Ok(())
+}
+
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
-    run_agent_stream,
-    list_projects_with_status,
-    read_run_json,
-    clear_run_json,
-    set_run_config,
-    git_status_project,
-    git_diff_project_v2,
-    reveal_project,
+    
+  run_agent_stream,
+  list_projects_with_status,
+  read_run_json,
+  clear_run_json,
+  set_run_config,
+  git_status_project,
+  git_diff_project_v2,
+  reveal_project,
+  start_live_flutter
+
 ])
     .run(tauri::generate_context!())
     .expect("error while running tauri app");

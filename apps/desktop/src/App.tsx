@@ -94,6 +94,7 @@ export default function App() {
       // IMPORTANT: Rust erwartet project, prompt, build_apk
             await invoke("set_run_config", { cfg: { live_preview: livePreview, stop_after: stopAfter } });
       await invoke("run_agent_stream", { project, prompt: raw, buildApk });
+      await invoke("start_live_flutter");
     } catch (e: any) {
       setLogs((prev) => [...prev, `[ui] ❌ invoke failed: ${String(e)}`]);
       setRunning(false);
