@@ -13,7 +13,25 @@ type ProjectInfo = {
 
 
 export default function App() {
-  const [project, setProject] = useState("todo_flutter");
+  
+  
+  const [status, setStatus] = React.useState<string>('idle');
+
+  React.useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch('/run.json?_=' + Date.now());
+        if (!res.ok) return;
+        const j = await res.json();
+        if (j?.status === 'success') setStatus('done');
+        if (j?.status === 'running') setStatus('running');
+        if (j?.status === 'error' || j?.exitCode > 0) setStatus('error');
+      } catch {}
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+const [agentStatus, setAgentStatus] = React.useState<string>('idle');
+const [project, setProject] = useState("todo_flutter");
   const [buildApk, setBuildApk] = useState(false);
   const [livePreview, setLivePreview] = useState(true);
   const [stopAfter, setStopAfter] = useState<"never" | "generate">("never");
@@ -30,7 +48,14 @@ export default function App() {
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   useEffect(() => {
-    (async () => {
+    
+    const unlisten = window.__TAURI__?.event?.listen?.('agent:stdout', (e:any) => {
+      const line = String(e?.payload || '');
+      if (line.includes('AGENT_STATUS:RUNNING')) setAgentStatus('running');
+      if (line.includes('AGENT_STATUS:RELOAD_OK')) setAgentStatus('reload_ok');
+      if (line.includes('AGENT_STATUS:DONE')) setAgentStatus('done');
+    });
+(async () => {
       try {
         const items = await invoke<ProjectInfo[]>("list_projects_with_status");
         setProjects(items);
@@ -72,7 +97,9 @@ export default function App() {
     };
   }, []);
 
-  async function onRun() {
+  
+    return () => { if (unlisten?.then) unlisten.then((f:any)=>f()); };
+async function onRun() {
     if (running) return;
     setLogs([]);
     setRunning(true);
