@@ -628,13 +628,11 @@ execSync(`bash "${repoRoot}/scripts/flutter_hot_reload_osascript.sh"`, { stdio: 
         log("[agent] hot reload triggered");
         log("AGENT_STATUS:RELOAD_OK");
       } catch (e) {
-        err(`[agent] hot reload failed: ${e?.message || e}`);
         try {
 execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh"`, { stdio: "inherit" });
           log("[agent] live flutter started");
           log("AGENT_STATUS:LIVE_STARTED");
         } catch (e2) {
-          err(`[agent] live start failed: ${e2?.message || e2}`);
           err("[agent] live trigger failed");
           log("AGENT_STATUS:LIVE_TRIGGER_FAILED");
         }
