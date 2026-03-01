@@ -3,32 +3,29 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECTS="$ROOT/workspace/projects"
-LATEST_PROJECT="$(ls -td "$PROJECTS"/*/ | head -n 1)"
+STATE="$ROOT/.flutter_live"
+mkdir -p "$STATE"
 
-if [ -z "$LATEST_PROJECT" ]; then
-  echo "❌ No Flutter project found in workspace/projects"
-  exit 1
-fi
-
-PIDFILE="$ROOT/workspace/flutter_run.pid"
-LOGFILE="$ROOT/workspace/flutter_run.log"
-
-cd "$LATEST_PROJECT"
-flutter pub get
-
-# Stop existing run if alive
-if [ -f "$PIDFILE" ]; then
-  OLD_PID="$(cat "$PIDFILE" || true)"
-  if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" >/dev/null 2>&1; then
-    echo "# Stopping previous flutter run (pid=$OLD_PID)"
-    kill "$OLD_PID" || true
-    sleep 1
+# If already running → do nothing
+if [ -f "$STATE/pid" ]; then
+  PID=$(cat "$STATE/pid")
+  if ps -p "$PID" >/dev/null 2>&1; then
+    echo "⚠️ Flutter already running (PID=$PID)"
+    exit 0
   fi
 fi
 
-echo "# Starting persistent flutter run..."
-nohup flutter run -d macos > "$LOGFILE" 2>&1 &
-echo $! > "$PIDFILE"
+LATEST_PROJECT="$(ls -td "$PROJECTS"/*/ | head -n 1)"
+cd "$LATEST_PROJECT"
 
-echo "# Running (pid=$(cat "$PIDFILE"))"
-echo "# Logs: tail -f $LOGFILE"
+# Fresh fifo
+rm -f "$STATE/stdin"
+mkfifo "$STATE/stdin"
+
+(
+  flutter run -d macos < "$STATE/stdin"
+) &
+PID=$!
+echo "$PID" > "$STATE/pid"
+
+echo "✅ Flutter live started (PID=$PID)"

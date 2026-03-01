@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+
+globalThis.__filesChanged = false;
+
 
 function getArg(name, fallback = "") {
   const i = process.argv.indexOf(`--${name}`);
@@ -104,7 +107,8 @@ function dedupeMaterialAppTitle(src) {
       seen += 1;
       return seen === 1;
     }
-    return true;
+    globalThis.__filesChanged = true;
+  return true;
   });
 
   const rep = outLines.join("\n");
@@ -152,7 +156,14 @@ function runCapture(cmd, args, cwd) {
 // ---------- run.json ----------
 function writeRunJson(payload) {
   fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
-}
+
+
+  // ---- BMAD 4.0.7: trigger flutter hot reload AFTER success ----
+  try {
+    spawnSync("bash", ["scripts/flutter_hot_reload.sh"], { stdio: "ignore" });
+    log('[agent] hot reload triggered');
+  } catch {}
+  }
 
 function apkPath(dir) {
   return path.join(dir, "build", "app", "outputs", "flutter-apk", "app-debug.apk");
@@ -636,3 +647,5 @@ main().catch((e) => {
   err(`[agent] fatal: ${e?.stack || e}`);
   process.exit(1);
 });
+
+
