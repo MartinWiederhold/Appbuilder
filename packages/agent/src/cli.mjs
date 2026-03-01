@@ -160,7 +160,7 @@ function writeRunJson(payload) {
 
   // ---- BMAD 4.0.7: trigger flutter hot reload AFTER success ----
   try {
-    spawnSync("bash", ["scripts/flutter_hot_reload.sh"], { stdio: "ignore" });
+    spawnSync("bash", ["scripts/flutter_hot_reload_osascript.sh"], { stdio: "ignore" });
   } catch {}
   }
 
@@ -624,7 +624,7 @@ async function main() {
     if (finalExit === 0) {
       try {
         const { execSync } = require("child_process");
-        execSync(`bash "${repoRoot}/scripts/flutter_hot_reload.sh"`, { stdio: "inherit" });
+        execSync(`bash "${repoRoot}/scripts/flutter_hot_reload_osascript.sh"`, { stdio: "inherit" });
         log("[agent] hot reload triggered");
         log("AGENT_STATUS:RELOAD_OK");
       } catch (e) {
