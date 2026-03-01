@@ -161,8 +161,7 @@ function writeRunJson(payload) {
   // ---- BMAD 4.0.7: trigger flutter hot reload AFTER success ----
   try {
     spawnSync("bash", ["scripts/flutter_hot_reload.sh"], { stdio: "ignore" });
-    log('[agent] hot reload triggered'); log('AGENT_STATUS:RELOAD_OK');
-  } catch {}
+    // removed stray reload log  } catch {}
   }
 
 function apkPath(dir) {
