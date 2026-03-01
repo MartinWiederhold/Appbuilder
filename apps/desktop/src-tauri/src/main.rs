@@ -17,6 +17,21 @@ struct ProjectInfo {
   finished_at: Option<String> // ISO timestamp
 }
 
+
+#[derive(serde::Deserialize)]
+struct RunConfig {
+  live_preview: bool,
+  stop_after: String, // "never" | "generate"
+}
+
+#[tauri::command]
+fn set_run_config(cfg: RunConfig) -> Result<(), String> {
+  std::env::set_var("LIVE_PREVIEW", if cfg.live_preview { "1" } else { "0" });
+  std::env::set_var("STOP_AFTER", cfg.stop_after);
+  Ok(())
+}
+
+
 #[tauri::command]
 fn list_projects_with_status() -> Vec<ProjectInfo> {
   let root = repo_root().join("workspace/projects");
@@ -51,6 +66,7 @@ fn list_projects_with_status() -> Vec<ProjectInfo> {
 
 #[tauri::command]
 async fn run_agent_stream(window: Window, project: String, prompt: String, build_apk: bool) -> Result<(), String> {
+  eprintln!("[dbg] run_agent_stream INVOKED");
   let root = repo_root();
   let agent = root.join("packages/agent/src/cli.mjs");
 
@@ -87,11 +103,64 @@ async fn run_agent_stream(window: Window, project: String, prompt: String, build
 
   tokio::spawn(async move {
     let ok = child.wait().await.map(|s| s.success()).unwrap_or(false);
+    start_live_preview();
     let _ = window.emit("agent:done", if ok { "success" } else { "failed" });
   });
 
   Ok(())
 }
+
+
+#[tauri::command]
+fn git_status_project(project: String) -> Result<String, String> {
+  use std::process::Command;
+
+  let root = repo_root();
+  let project_path = root.join("workspace").join("projects").join(&project);
+
+  // git runs at repo root; filter output to this project folder
+  let out = Command::new("git")
+    .arg("-C").arg(&root)
+    .arg("status").arg("--porcelain")
+    .arg("--")
+    .arg(&project_path)
+    .output()
+    .map_err(|e| format!("git_status_spawn_error={e}"))?;
+
+  Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[tauri::command]
+fn git_diff_project_v2(project: String) -> Result<String, String> {
+  use std::process::Command;
+
+  let root = repo_root();
+  let rel = format!("workspace/projects/{}", project);
+
+  let out = Command::new("git")
+    .arg("-C").arg(&root)
+    .arg("diff")
+    .arg("--").arg(&rel)
+    .output()
+    .map_err(|e| format!("git_diff_spawn_error={e}"))?;
+
+  Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[tauri::command]
+fn reveal_project(project: String) -> Result<(), String> {
+  let root = repo_root();
+  let dir = root.join("workspace/projects").join(project);
+
+  std::process::Command::new("open")
+    .arg(dir)
+    .spawn()
+    .map_err(|e| format!("open_spawn_error={e}"))?;
+
+  Ok(())
+}
+
+
 
 
 #[tauri::command]
@@ -195,13 +264,43 @@ fn clear_run_json(project: String) -> Result<(), String> {
 }
 
 
+
+// AUTO_LIVE_PREVIEW
+fn start_live_preview() {
+    use std::process::Command;
+
+    // Gate: only run when LIVE_PREVIEW=1
+    if std::env::var("LIVE_PREVIEW").ok().as_deref() != Some("1") {
+        return;
+    }
+
+    // Gate: stop after phase (default: never)
+    let stop_after = std::env::var("STOP_AFTER").unwrap_or_else(|_| "never".to_string());
+    if stop_after != "never" {
+        // If user wants to stop after some phase, we do NOT auto-start/reload preview.
+        return;
+    }
+
+// Startet/Restartet Flutter Live Preview Script (background)
+    println!("[live_preview] start_live_preview() called");
+    let _ = Command::new("bash")
+        .arg("-lc")
+        .arg("cd ~/dev/flutter-builder && ./scripts/run_live_flutter.sh")
+        .spawn();
+}
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
-    run_agent_stream, list_projects_with_status,
+    run_agent_stream,
+    list_projects_with_status,
     read_run_json,
-    clear_run_json
-  ])
+    clear_run_json,
+    set_run_config,
+    git_status_project,
+    git_diff_project_v2,
+    reveal_project,
+])
     .run(tauri::generate_context!())
     .expect("error while running tauri app");
 }

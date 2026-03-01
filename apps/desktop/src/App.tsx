@@ -5,21 +5,58 @@ import { invoke } from "@tauri-apps/api/core";
 
 type AgentLogPayload = string;
 
+type ProjectInfo = {
+  name: string;
+  last_status: string;
+  finished_at?: string | null;
+};
+
+
 export default function App() {
+  const [project, setProject] = useState("todo_flutter");
+  const [buildApk, setBuildApk] = useState(false);
+  const [livePreview, setLivePreview] = useState(true);
+  const [stopAfter, setStopAfter] = useState<"never" | "generate">("never");
   const [prompt, setPrompt] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+
   const [running, setRunning] = useState(false);
+  const [tab, setTab] = useState<"logs" | "changes">("logs");
+  const [statusText, setStatusText] = useState("");
+  const [diffText, setDiffText] = useState("");
+
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   useEffect(() => {
+    (async () => {
+      try {
+        const items = await invoke<ProjectInfo[]>("list_projects_with_status");
+        setProjects(items);
+        if (!project && items.length) setProject(items[0].name);
+      } catch (e: any) {
+        setLogs((prev) => [...prev, `[ui] ⚠️ could not load projects: ${String(e)}`]);
+      }
+    })();
+
     const unlistenPromises = [
       listen<AgentLogPayload>("agent:log", (event) => {
         setLogs((prev) => [...prev, String(event.payload)]);
       }),
-      listen<string>("agent:done", (event) => {
+      listen<string>("agent:done", async (event) => {
         setLogs((prev) => [...prev, `\n[done] ${String(event.payload)}`]);
         setRunning(false);
+        try {
+          const st = await invoke<string>("git_status_project", { project });
+          const df = await invoke<string>("git_diff_project_v2", { project });
+          setStatusText(st || "");
+          setDiffText(df || "");
+        } catch (e: any) {
+          setStatusText("");
+          setDiffText(`(could not load diff) ${String(e)}`);
+        }
+
       }),
     ];
 
@@ -40,16 +77,96 @@ export default function App() {
     setLogs([]);
     setRunning(true);
 
-    // IMPORTANT: keep prompt EXACTLY as typed (incl. newlines)
     const raw = prompt.replace(/\r\n/g, "\n");
-    console.log("PROMPT_RAW:", JSON.stringify(raw));
 
-    await invoke("run_agent_stream", { prompt: raw });
+    if (!raw.trim()) {
+      setLogs((prev) => [...prev, "[ui] ❌ Prompt ist leer. Bitte feature/title/home_title eingeben."]);
+      setRunning(false);
+      return;
+    }
+    if (!project.trim()) {
+      setLogs((prev) => [...prev, "[ui] ❌ Project ist leer. Bitte z.B. todo_flutter eintragen."]);
+      setRunning(false);
+      return;
+    }
+
+    try {
+      // IMPORTANT: Rust erwartet project, prompt, build_apk
+            await invoke("set_run_config", { cfg: { live_preview: livePreview, stop_after: stopAfter } });
+      await invoke("run_agent_stream", { project, prompt: raw, buildApk });
+    } catch (e: any) {
+      setLogs((prev) => [...prev, `[ui] ❌ invoke failed: ${String(e)}`]);
+      setRunning(false);
+    }
   }
 
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto 1fr", gap: 12, padding: 16 }}>
-      <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "grid", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
+          
+          <select
+            value={project}
+            onChange={(e) => setProject(e.target.value)}
+            style={{
+              width: "100%",
+              padding: 10,
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "#111",
+              color: "#fff",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+            }}
+          >
+            {projects.length === 0 ? (
+              <option value="todo_flutter">todo_flutter</option>
+            ) : (
+              projects.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}  ·  {p.last_status}
+                </option>
+              ))
+            )}
+          </select>
+<label style={{ display: "flex", gap: 8, alignItems: "center", color: "#aaa", fontSize: 12 }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "#aaa", fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={livePreview}
+              onChange={(e) => setLivePreview(e.target.checked)}
+            />
+            Live Preview
+          </label>
+
+          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "#aaa", fontSize: 12 }}>
+            Stop after
+            <select
+              value={stopAfter}
+              onChange={(e) => setStopAfter(e.target.value as any)}
+              style={{
+                background: "#111",
+                color: "#fff",
+                border: "1px solid #333",
+                borderRadius: 8,
+                padding: "6px 8px",
+                fontSize: 12,
+              }}
+            >
+              <option value="never">never</option>
+              <option value="generate">generate</option>
+            </select>
+          </label>
+
+            <input
+              type="checkbox"
+              checked={buildApk}
+              onChange={(e) => setBuildApk(e.target.checked)}
+            />
+            Build APK
+          </label>
+        </div>
+
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -86,29 +203,120 @@ export default function App() {
           >
             {running ? "Running…" : "Run"}
           </button>
+          <button
+            onClick={() => invoke("reveal_project", { project })}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "#111",
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Reveal Project
+          </button>
+
+          <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
+            <button
+              onClick={() => setTab("logs")}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: tab === "logs" ? "#fff" : "#111",
+                color: tab === "logs" ? "#000" : "#fff",
+                cursor: "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Logs
+            </button>
+            <button
+              onClick={() => setTab("changes")}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: tab === "changes" ? "#fff" : "#111",
+                color: tab === "changes" ? "#000" : "#fff",
+                cursor: "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Changes
+            </button>
+          </div>
 
           <div style={{ color: "#aaa", fontSize: 12 }}>
-            Prompt wird jetzt inkl. Zeilenumbrüchen gesendet.
+            LIVE_PREVIEW wird nach agent:done getriggert (wenn LIVE_PREVIEW=1 und STOP_AFTER=never).
           </div>
         </div>
       </div>
 
-      <textarea
-        readOnly
-        value={logText}
-        style={{
+      
+      {tab === "logs" ? (
+        <textarea
+          readOnly
+          value={logText}
+          style={{
+            width: "100%",
+            height: "100%",
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#0b0b0b",
+            color: "#d6d6d6",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 12,
+            lineHeight: 1.4,
+          }}
+        />
+      ) : (
+        <div style={{
           width: "100%",
           height: "100%",
-          padding: 12,
-          borderRadius: 12,
-          border: "1px solid #333",
-          background: "#0b0b0b",
-          color: "#d6d6d6",
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-          fontSize: 12,
-          lineHeight: 1.4,
-        }}
-      />
+          display: "grid",
+          gridTemplateRows: "auto 1fr",
+          gap: 10,
+        }}>
+          <textarea
+            readOnly
+            value={statusText || "(no changes)"}
+            style={{
+              width: "100%",
+              height: 120,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #333",
+              background: "#0b0b0b",
+              color: "#d6d6d6",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          />
+          <textarea
+            readOnly
+            value={diffText || "(no diff)"}
+            style={{
+              width: "100%",
+              height: "100%",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #333",
+              background: "#0b0b0b",
+              color: "#d6d6d6",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          />
+        </div>
+      )}
+
+
     </div>
   );
 }
