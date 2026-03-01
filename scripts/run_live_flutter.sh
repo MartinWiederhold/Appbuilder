@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-# Repo root (parent of scripts/)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECTS="$ROOT/workspace/projects"
-
-# Nimm das zuletzt geänderte Projekt
 LATEST_PROJECT="$(ls -td "$PROJECTS"/*/ | head -n 1)"
 
 if [ -z "$LATEST_PROJECT" ]; then
@@ -13,9 +10,25 @@ if [ -z "$LATEST_PROJECT" ]; then
   exit 1
 fi
 
-echo "# Starting Flutter live preview for:"
-echo "  $LATEST_PROJECT"
+PIDFILE="$ROOT/workspace/flutter_run.pid"
+LOGFILE="$ROOT/workspace/flutter_run.log"
 
 cd "$LATEST_PROJECT"
 flutter pub get
-flutter run -d macos
+
+# Stop existing run if alive
+if [ -f "$PIDFILE" ]; then
+  OLD_PID="$(cat "$PIDFILE" || true)"
+  if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" >/dev/null 2>&1; then
+    echo "# Stopping previous flutter run (pid=$OLD_PID)"
+    kill "$OLD_PID" || true
+    sleep 1
+  fi
+fi
+
+echo "# Starting persistent flutter run..."
+nohup flutter run -d macos > "$LOGFILE" 2>&1 &
+echo $! > "$PIDFILE"
+
+echo "# Running (pid=$(cat "$PIDFILE"))"
+echo "# Logs: tail -f $LOGFILE"
