@@ -1,5 +1,5 @@
-import { execSync } from "node:child_process";
 #!/usr/bin/env node
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
