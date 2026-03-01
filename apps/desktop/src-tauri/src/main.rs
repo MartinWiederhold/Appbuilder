@@ -292,15 +292,14 @@ fn start_live_preview() {
 #[tauri::command]
 async fn start_live_flutter() -> Result<(), String> {
   let root = repo_root();
-  let script = root.join("scripts/open_live_flutter_terminal.sh");
+  let script = root.join("scripts/run_live_flutter.sh");
 
-  let mut cmd = std::process::Command::new("bash");
-  cmd.arg(script)
+  std::process::Command::new("bash")
+    .arg(script)
     .current_dir(&root)
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
+    .spawn()
+    .map_err(|e| format!("start_live_flutter failed: {e}"))?;
 
-  cmd.spawn().map_err(|e| format!("start_live_flutter failed: {e}"))?;
   Ok(())
 }
 
