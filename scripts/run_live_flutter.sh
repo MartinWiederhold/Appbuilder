@@ -12,6 +12,9 @@ if [ -z "${LATEST_PROJECT:-}" ]; then
   exit 1
 fi
 
+# Remember which Terminal window is running Flutter
+osascript -e 'tell application "Terminal" to id of front window' > "$STATE/terminal_window_id" || true
+
 # Kill old session if exists
 if [ -f "$STATE/pid" ]; then
   OLD_PID="$(cat "$STATE/pid" || true)"
@@ -21,16 +24,8 @@ if [ -f "$STATE/pid" ]; then
   fi
 fi
 
-# Recreate fifo cleanly
-rm -f "$STATE/stdin"
-mkfifo "$STATE/stdin"
-
 cd "$LATEST_PROJECT"
 
-(
-  flutter run -d macos < "$STATE/stdin"
-) &
+# Start flutter in THIS terminal (no fifo)
+flutter run -d macos
 
-PID=$!
-echo "$PID" > "$STATE/pid"
-echo "Flutter live started (PID=$PID)"
