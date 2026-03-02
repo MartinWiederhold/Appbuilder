@@ -27,33 +27,24 @@ fn find_repo_root() -> Option<std::path::PathBuf> {
 
 #[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
-  let mut dir = std::env::current_dir().map_err(|e| format!("current_dir: {}", e))?;
-  let cwd = dir.clone();
+  let cwd = std::env::current_dir().map_err(|e| format!("current_dir: {}", e))?;
 
-  let root = loop {
-    if dir.join("workspace").join("projects").is_dir() {
-      break dir.clone();
-    }
+  // If we're inside ".../apps/...", repo root is the parent of "apps"
+  let mut dir = cwd.clone();
+  let repo_root = loop {
     if dir.file_name().and_then(|x| x.to_str()) == Some("apps") {
-      if let Some(parent) = dir.parent() {
-        if parent.join("workspace").join("projects").is_dir() {
-          break parent.to_path_buf();
-        }
-      }
+      let parent = dir.parent().ok_or("apps has no parent")?.to_path_buf();
+      break parent;
     }
     if !dir.pop() {
-      return Err(format!(
-        "Could not locate repo root (workspace/projects not found). cwd={}",
-        cwd.display()
-      ));
+      return Err(format!("Could not locate repo root (no 'apps' folder in parents). cwd={}", cwd.display()));
     }
   };
 
-  let path = root.join("workspace").join("projects").join(&project).join("run.json");
-
+  let path = repo_root.join("workspace").join("projects").join(&project).join("run.json");
   std::fs::read_to_string(&path).map_err(|e| format!(
-    "read_run_json_project failed: cwd={} root={} path={} err={}",
-    cwd.display(), root.display(), path.display(), e
+    "read_run_json_project failed: cwd={} repo_root={} path={} err={}",
+    cwd.display(), repo_root.display(), path.display(), e
   ))
 }
 
