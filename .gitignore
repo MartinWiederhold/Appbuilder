@@ -19,3 +19,6 @@ workspace/
 
 # Flutter live run state
 .flutter_live/
+
+# Generated Flutter projects (OUTPUT)
+workspace/projects/**
