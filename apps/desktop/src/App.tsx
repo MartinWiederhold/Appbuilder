@@ -20,7 +20,7 @@ export default function App() {
   const [status, setStatus] = useState<string>('idle');
 
   useEffect(() => {
-    refreshRunJsonForProject(project, setRunJson);
+    refreshRunJsonForProject(project);
 
     const id = setInterval(async () => {
       try {
@@ -58,11 +58,11 @@ const [project, setProject] = useState("todo_flutter");
   const [runJson, setRunJson] = useState<RunJson | null>(null);
 
 
-  async function refreshRunJsonForProject(pname: string) {
+  async function refreshRunJsonForProject(pname: string, setter = setRunJson) {
     try {
       const txt = await invoke<string>("read_run_json_project", { project: pname });
       const json = JSON.parse(txt);
-      setRunJson(json);
+      setter(json);
     } catch {
       // ignore if missing
     }
@@ -108,14 +108,12 @@ const [project, setProject] = useState("todo_flutter");
         await refreshRunJsonForProject(project);
 
         setLogs((prev) => [...prev, `\n[done] ${String(event.payload)}`]);
-        await refreshRunJsonForProject(project, setRunJson);
-
 // Refresh run.json so BMAD phase can reflect lastStep
         try {
           const res = await /* replaced */ null;
           if (res.ok) {
             const json = await res.json();
-            setRunJson(json);
+            setter(json);
           }
         } catch {}
 
