@@ -86,6 +86,20 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   let _ = app.emit("agent:log", format!("[backend] run_agent_stream project={project} buildApk={build_apk}"));
   let _ = app.emit("agent:log", format!("[backend] prompt: {prompt}"));
   println!("[backend] wrote run.json (if agent produced it)");
+  
+  // HARDEN: ensure run.json gets a fresh finishedAt even if the agent didn't update it
+  if let Ok(mut txt) = std::fs::read_to_string(&path) {
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&txt) {
+      // set finishedAt = now (UTC ISO-like)
+      let now = chrono::Utc::now().to_rfc3339();
+      v["finishedAt"] = serde_json::Value::String(now);
+      if let Ok(out) = serde_json::to_string_pretty(&v) {
+        let _ = std::fs::write(&path, out);
+        println!("[backend] hardened run.json finishedAt update: {}", path.display());
+      }
+    }
+  }
+
   let _ = app.emit("agent:done", "ok");
   Ok(())
 }
