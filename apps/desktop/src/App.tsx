@@ -20,6 +20,8 @@ export default function App() {
   const [status, setStatus] = useState<string>('idle');
 
   useEffect(() => {
+    refreshRunJsonForProject(project, setRunJson);
+
     const id = setInterval(async () => {
       try {
         const res = await /* replaced */ null;
@@ -104,6 +106,8 @@ const [project, setProject] = useState("todo_flutter");
         await refreshRunJsonForProject(project);
 
         setLogs((prev) => [...prev, `\n[done] ${String(event.payload)}`]);
+        await refreshRunJsonForProject(project, setRunJson);
+
 // Refresh run.json so BMAD phase can reflect lastStep
         try {
           const res = await /* replaced */ null;
