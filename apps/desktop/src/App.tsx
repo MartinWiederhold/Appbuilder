@@ -71,6 +71,7 @@ const [project, setProject] = useState("todo_flutter");
 
     const unlistenPromises = [
       listen<AgentLogPayload>("agent:log", (event) => {
+        setRunning(true);
         setLogs((prev) => [...prev, String(event.payload)]);
       }),
       listen<string>("agent:done", async (event) => {
@@ -134,7 +135,7 @@ async function onRun() {
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto 1fr", gap: 12, padding: 16 }}>
       <div style={{ color: "#aaa", fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>BMAD Phase: {bmadPhase}</div>
-    <RunStatusCard />
+    <RunStatusCard bmadPhase={bmadPhase} />
       <div style={{ display: "grid", gap: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
           
