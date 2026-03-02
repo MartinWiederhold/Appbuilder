@@ -42,8 +42,8 @@ fn read_run_json_project(project: String) -> Result<String, String> {
   };
 
   let path = repo_root.join("workspace").join("projects").join(&project).join("run.json");
-  let _ = app.emit("agent:log", format!("[backend] run.json path: {}", path.display()));
-  std::fs::read_to_string(&path).map_err(|e| format!(
+
+  println!("[backend] run.json path: {}", path.display());std::fs::read_to_string(&path).map_err(|e| format!(
     "read_run_json_project failed: cwd={} repo_root={} path={} err={}",
     cwd.display(), repo_root.display(), path.display(), e
   ))
@@ -85,7 +85,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   // Minimal "fake agent" to prove pipeline works: emits logs + done event.
   let _ = app.emit("agent:log", format!("[backend] run_agent_stream project={project} buildApk={build_apk}"));
   let _ = app.emit("agent:log", format!("[backend] prompt: {prompt}"));
-  let _ = app.emit("agent:log", "[backend] wrote run.json (if agent produced it)");
+  println!("[backend] wrote run.json (if agent produced it)");
   let _ = app.emit("agent:done", "ok");
   Ok(())
 }
