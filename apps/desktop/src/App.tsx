@@ -22,7 +22,7 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const res = await fetch('/run.json?_=' + Date.now());
+        const res = await /* replaced */ null;
         if (!res.ok) return;
         const j = await res.json();
         if (j?.status === 'success') setStatus('done');
@@ -42,7 +42,30 @@ const [project, setProject] = useState("todo_flutter");
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
 
   const [running, setRunning] = useState(false);
+
+  // BMAD_RUNNING_TIMEOUT: never let UI get stuck in "running"
+  useEffect(() => {
+    if (!running) return;
+    const t = setTimeout(() => {
+      setRunning(false);
+      setLogs((prev) => [...prev, "[ui] ⚠️ running timeout -> reset to idle"]);
+    }, 60_000);
+    return () => clearTimeout(t);
+  }, [running]);
+
   const [runJson, setRunJson] = useState<RunJson | null>(null);
+
+
+  async function refreshRunJsonForProject(pname: string) {
+    try {
+      const txt = await invoke<string>("read_run_json_project", { project: pname });
+      const json = JSON.parse(txt);
+      setRunJson(json);
+    } catch {
+      // ignore if missing
+    }
+  }
+
   const [tab, setTab] = useState<"logs" | "changes">("logs");
   const [statusText, setStatusText] = useState("");
   const [diffText, setDiffText] = useState("");
@@ -75,8 +98,21 @@ const [project, setProject] = useState("todo_flutter");
         setLogs((prev) => [...prev, String(event.payload)]);
       }),
       listen<string>("agent:done", async (event) => {
-        setLogs((prev) => [...prev, `\n[done] ${String(event.payload)}`]);
+        try {
+
         setRunning(false);
+        await refreshRunJsonForProject(project);
+
+        setLogs((prev) => [...prev, `\n[done] ${String(event.payload)}`]);
+// Refresh run.json so BMAD phase can reflect lastStep
+        try {
+          const res = await /* replaced */ null;
+          if (res.ok) {
+            const json = await res.json();
+            setRunJson(json);
+          }
+        } catch {}
+
         try {
           const st = await invoke<string>("git_status_project", { project });
           const df = await invoke<string>("git_diff_project_v2", { project });
@@ -87,7 +123,12 @@ const [project, setProject] = useState("todo_flutter");
           setDiffText(`(could not load diff) ${String(e)}`);
         }
 
-      }),
+      
+        } finally {
+          // keep UI responsive even if something hangs later
+          setRunning(false);
+        }
+}),
     ];
 
     return () => {

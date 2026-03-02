@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Mutex;
+use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Default)]
@@ -11,6 +12,24 @@ struct RunConfig {
 struct RunConfigState(Mutex<RunConfig>);
 
 // --- Commands used by the frontend (src/App.tsx) ---
+fn find_repo_root() -> Option<PathBuf> {
+  let mut dir = std::env::current_dir().ok()?;
+  for _ in 0..8 {
+    if dir.join("workspace").join("projects").is_dir() {
+      return Some(dir);
+    }
+    if !dir.pop() { break; }
+  }
+  None
+}
+
+#[tauri::command]
+fn read_run_json_project(project: String) -> Result<String, String> {
+  let root = find_repo_root().ok_or("Could not locate repo root (workspace/projects not found)")?;
+  let path = root.join("workspace").join("projects").join(project).join("run.json");
+  std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
 
 #[tauri::command]
 fn read_run_json(abs_path: String) -> Result<String, String> {
