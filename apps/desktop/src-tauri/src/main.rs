@@ -27,8 +27,30 @@ fn find_repo_root() -> Option<std::path::PathBuf> {
 
 #[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
-  let root = find_repo_root().ok_or("Could not locate repo root (workspace/projects not found)")?;
-    let path = root.join("workspace").join("projects").join(project).join("run.json");
+  // Find repo root as the directory that contains workspace/projects.
+  // Works even if current_dir is inside .../apps/desktop (we then climb to parent).
+  let mut dir = std::env::current_dir().map_err(|e| format!("current_dir: {}", e))?;
+
+  let root = loop {
+    if dir.join("workspace").join("projects").is_dir() {
+      break dir.clone();
+    }
+
+    // If we're currently at ".../apps", try its parent (repo root) directly.
+    if dir.file_name().and_then(|x| x.to_str()) == Some("apps") {
+      if let Some(parent) = dir.parent() {
+        if parent.join("workspace").join("projects").is_dir() {
+          break parent.to_path_buf();
+        }
+      }
+    }
+
+    if !dir.pop() {
+      return Err("Could not locate repo root (workspace/projects not found)".to_string());
+    }
+  };
+
+  let path = root.join("workspace").join("projects").join(&project).join("run.json");
   std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
