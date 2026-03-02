@@ -1,88 +1,59 @@
-import { useEffect, useMemo, useState } from "react";
-import { readRunJson, type RunJson } from "../lib/runJson";
+import React from "react";
 
-const RUN_JSON_ABS = "/Users/martinwiederhold/dev/flutter-builder/workspace/projects/todo_flutter/run.json";
+type Props = {
+  status?: string;
+  exitCode?: number | null;
+  lastStep?: string | null;
+  bmadPhase?: string | null;
+};
 
-function fmt(iso?: string) {
-  if (!iso) return "-";
-  try { return new Date(iso).toLocaleString(); } catch { return iso; }
-}
+export default function RunStatusCard(props: Props) {
+  const { status, exitCode, lastStep, bmadPhase } = props;
 
-function StatusPill({ status }: { status?: string }) {
-  const label = status ?? "unknown";
-  const style: React.CSSProperties =
-    label === "success"
-      ? { background: "#0a7", color: "white" }
-      : label === "failed"
-      ? { background: "#d33", color: "white" }
-      : { background: "#777", color: "white" };
+  const label =
+    status === "running"
+      ? "running"
+      : status === "success"
+        ? "success"
+        : status === "error"
+          ? "error"
+          : status ?? "idle";
 
-  return (
-    <span style={{ ...style, padding: "4px 8px", borderRadius: 999, fontSize: 12 }}>
-      {label}
-    </span>
-  );
-}
-
-export default function RunStatusCard({ bmadPhase }: { bmadPhase?: string }) {
-  const [data, setData] = useState<RunJson | null>(null);
-  const [lastReadAt, setLastReadAt] = useState<number>(0);
-
-  async function refresh() {
-    const j = await readRunJson(RUN_JSON_ABS);
-    setData(j);
-    setLastReadAt(Date.now());
-  }
-
-  useEffect(() => {
-    refresh();
-    const id = window.setInterval(refresh, 1000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const steps = data?.steps ?? [];
-  const lastStep = useMemo(() => {
-  if (!steps.length) return null;
-  const s = steps[steps.length - 1];
-  return `${s?.name ?? "step"} (exit=${s?.exitCode ?? "?"})`;
-}, [steps]);
+  const pillStyle: React.CSSProperties = {
+    display: "inline-block",
+    padding: "6px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    border: "1px solid #333",
+    color: "#ddd",
+    background: "#111",
+  };
 
   return (
-    <div style={{
-      <div style={{ color: "#aaa", fontSize: 12, marginBottom: 8 }}>BMAD Phase: {bmadPhase ?? "—"}</div>
-
-      border: "1px solid #333",
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
-      background: "#111",
-      color: "#eee",
-      display: "grid",
-      gap: 8
-    }}>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <strong>Run Status</strong>
-        <div style={{ display: "flex", gap: 10 }}>
-          <StatusPill status={data?.status} />
-          <button onClick={refresh}>Refresh</button>
-        </div>
+    <div
+      style={{
+        border: "1px solid #333",
+        borderRadius: 16,
+        padding: 20,
+        minHeight: 180,
+        background: "rgba(0,0,0,0.25)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 28, fontWeight: 700 }}>Run Status</div>
+        <span style={pillStyle}>{label}</span>
       </div>
 
-      <div style={{ fontSize: 13, display: "grid", gridTemplateColumns: "140px 1fr", gap: 6 }}>
-        <div>Project</div><div>{data?.project ?? "-"}</div>
-        <div>Exit code</div><div>{String(data?.exitCode ?? "-")}</div>
-        <div>Started</div><div>{fmt(data?.startedAt)}</div>
-        <div>Finished</div><div>{fmt(data?.finishedAt)}</div>
-        <div>Last step
-BMAD Phase</div><div>{lastStep ?? "-"}</div>
-        <div>Last read</div><div>{new Date(lastReadAt).toLocaleTimeString()}</div>
+      <div style={{ marginTop: 14, color: "#aaa", fontSize: 13 }}>
+        BMAD Phase: <span style={{ color: "#ddd" }}>{bmadPhase ?? "—"}</span>
       </div>
 
-      {data === null && (
-        <div style={{ color: "#f55" }}>
-          Could not read run.json (check Tauri fs scope).
-        </div>
-      )}
+      <div style={{ marginTop: 18, color: "#bbb", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+        {exitCode !== undefined && exitCode !== null && (
+          <div style={{ marginBottom: 6 }}>exitCode: {exitCode}</div>
+        )}
+        {lastStep && <div style={{ marginBottom: 6 }}>lastStep: {lastStep}</div>}
+      </div>
     </div>
   );
 }
