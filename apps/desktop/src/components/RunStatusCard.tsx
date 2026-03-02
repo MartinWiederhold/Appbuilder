@@ -18,13 +18,9 @@ function StatusPill({ status }: { status?: string }) {
       : { background: "#777", color: "white" };
 
   return (
-    <>
-      <div style={{ color: "#aaa", fontSize: 12, marginBottom: 8 }}>BMAD Phase: {bmadPhase ?? "—"}</div>
-
     <span style={{ ...style, padding: "4px 8px", borderRadius: 999, fontSize: 12 }}>
       {label}
     </span>
-    </>
   );
 }
 
@@ -53,6 +49,8 @@ export default function RunStatusCard({ bmadPhase }: { bmadPhase?: string }) {
 
   return (
     <div style={{
+      <div style={{ color: "#aaa", fontSize: 12, marginBottom: 8 }}>BMAD Phase: {bmadPhase ?? "—"}</div>
+
       border: "1px solid #333",
       borderRadius: 12,
       padding: 16,
