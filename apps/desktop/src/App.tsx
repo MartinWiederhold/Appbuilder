@@ -100,6 +100,15 @@ const [project, setProject] = useState("todo_flutter");
         setLogs((prev) => [...prev, String(event.payload)]);
       }),
       listen<string>("agent:done", async (event) => {
+        // DEBUG: verify tauri invoke works
+        try {
+          const raw = await invoke<string>("read_run_json_project", { project });
+          setLogs((prev) => [...prev, `[ui] read_run_json_project ok (${raw.length} chars)`]);
+        } catch (e: any) {
+          setLogs((prev) => [...prev, `[ui] read_run_json_project ERROR: ${String(e)}`]);
+        }
+
+
         try {
 
         setRunning(false);
