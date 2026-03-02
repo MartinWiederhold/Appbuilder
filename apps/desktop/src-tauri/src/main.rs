@@ -12,9 +12,11 @@ struct RunConfig {
 struct RunConfigState(Mutex<RunConfig>);
 
 // --- Commands used by the frontend (src/App.tsx) ---
-fn find_repo_root() -> Option<PathBuf> {
+fn find_repo_root() -> Option<std::path::PathBuf> {
   let mut dir = std::env::current_dir().ok()?;
-  for _ in 0..8 {
+
+  loop {
+    // repo root is the directory that contains workspace/projects
     if dir.join("workspace").join("projects").is_dir() {
       return Some(dir);
     }
@@ -26,7 +28,7 @@ fn find_repo_root() -> Option<PathBuf> {
 #[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
   let root = find_repo_root().ok_or("Could not locate repo root (workspace/projects not found)")?;
-  let path = root.join("workspace").join("projects").join(project).join("run.json");
+    let path = root.join("workspace").join("projects").join(project).join("run.json");
   std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
@@ -81,8 +83,8 @@ fn main() {
       set_run_config,
       run_agent_stream,
       start_live_flutter,
-      reveal_project
-    ])
+      reveal_project,
+    read_run_json_project])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
