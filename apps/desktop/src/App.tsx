@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import RunStatusCard from "./components/RunStatusCard";
 import "./App.css";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { deriveBmadPhase, type RunJson } from "./bmad_phase";
 
 type AgentLogPayload = string;
 
@@ -15,9 +17,9 @@ type ProjectInfo = {
 export default function App() {
   
   
-  const [status, setStatus] = React.useState<string>('idle');
+  const [status, setStatus] = useState<string>('idle');
 
-  React.useEffect(() => {
+  useEffect(() => {
     const id = setInterval(async () => {
       try {
         const res = await fetch('/run.json?_=' + Date.now());
@@ -30,7 +32,7 @@ export default function App() {
     }, 500);
     return () => clearInterval(id);
   }, []);
-const [agentStatus, setAgentStatus] = React.useState<string>('idle');
+const [agentStatus, setAgentStatus] = useState<string>('idle');
 const [project, setProject] = useState("todo_flutter");
   const [buildApk, setBuildApk] = useState(false);
   const [livePreview, setLivePreview] = useState(true);
@@ -40,12 +42,14 @@ const [project, setProject] = useState("todo_flutter");
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
 
   const [running, setRunning] = useState(false);
+  const [runJson, setRunJson] = useState<RunJson | null>(null);
   const [tab, setTab] = useState<"logs" | "changes">("logs");
   const [statusText, setStatusText] = useState("");
   const [diffText, setDiffText] = useState("");
 
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
+  const bmadPhase = deriveBmadPhase(runJson, running);
 
   useEffect(() => {
     
@@ -86,6 +90,7 @@ const [project, setProject] = useState("todo_flutter");
     ];
 
     return () => {
+      try { if (unlisten?.then) unlisten.then((f:any)=>f()); } catch {}
       unlistenPromises.forEach(async (p) => {
         try {
           const unlisten = await p;
@@ -97,8 +102,6 @@ const [project, setProject] = useState("todo_flutter");
     };
   }, []);
 
-  
-    return () => { if (unlisten?.then) unlisten.then((f:any)=>f()); };
 async function onRun() {
     if (running) return;
     setLogs([]);
@@ -130,6 +133,8 @@ async function onRun() {
 
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto 1fr", gap: 12, padding: 16 }}>
+      <div style={{ color: "#aaa", fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>BMAD Phase: {bmadPhase}</div>
+    <RunStatusCard />
       <div style={{ display: "grid", gap: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
           
