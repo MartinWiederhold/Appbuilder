@@ -59,6 +59,53 @@ fn preflight_is_complete(cfg: &Value) -> bool {
 }
 
 
+fn apply_preflight_env(app: &tauri::AppHandle, project_dir: &std::path::Path) {
+  let cfg = match read_preflight(project_dir) {
+    Some(v) => v,
+    None => return,
+  };
+
+  let integrations = cfg.get("integrations").and_then(|v| v.as_object());
+  let sup = integrations.and_then(|m| m.get("supabase")).and_then(|v| v.as_object());
+  let sg  = integrations.and_then(|m| m.get("sendgrid")).and_then(|v| v.as_object());
+
+  let sup_enabled = sup.and_then(|m| m.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false);
+  let sup_url = sup.and_then(|m| m.get("url")).and_then(|v| v.as_str()).unwrap_or("");
+  let sup_anon = sup.and_then(|m| m.get("anonKey")).and_then(|v| v.as_str()).unwrap_or("");
+
+  let sg_enabled = sg.and_then(|m| m.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false);
+  let sg_key = sg.and_then(|m| m.get("apiKey")).and_then(|v| v.as_str()).unwrap_or("");
+  let sg_from = sg.and_then(|m| m.get("fromEmail")).and_then(|v| v.as_str()).unwrap_or("");
+
+  let monetization = cfg.get("monetization").and_then(|v| v.as_str()).unwrap_or("free");
+
+  let env_content = format!(
+"SERVICES_PREFLIGHT=1
+MONETIZATION={}
+SUPABASE_ENABLED={}
+SUPABASE_URL={}
+SUPABASE_ANON_KEY={}
+SENDGRID_ENABLED={}
+SENDGRID_API_KEY={}
+SENDGRID_FROM_EMAIL={}
+",
+    monetization,
+    if sup_enabled { "true" } else { "false" },
+    sup_url,
+    sup_anon,
+    if sg_enabled { "true" } else { "false" },
+    sg_key,
+    sg_from
+  );
+
+  let env_path = project_dir.join(".env");
+  if std::fs::write(&env_path, env_content).is_ok() {
+    let _ = app.emit("agent:log", format!("[preflight] wrote {}", env_path.display()));
+  }
+}
+
+
+
 #[derive(Clone)]
 struct StepResult {
   name: String,
@@ -292,6 +339,10 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   })?;
 
   let project_dir = repo_root.join("workspace").join("projects").join(&project);
+
+  // APPLY_PREFLIGHT_ENV
+  apply_preflight_env(&app, &project_dir);
+
   let run_path = project_dir.join("run.json");
 
 
