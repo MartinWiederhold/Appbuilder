@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Mutex;
-use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
