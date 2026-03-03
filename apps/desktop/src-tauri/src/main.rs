@@ -2,6 +2,7 @@
 
 use tauri::{AppHandle, Emitter};
 use serde_json::json;
+use serde_json::Value;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::collections::VecDeque;
@@ -28,6 +29,35 @@ fn find_repo_root() -> Option<std::path::PathBuf> {
   }
   best
 }
+
+
+fn preflight_path(project_dir: &std::path::Path) -> std::path::PathBuf {
+  project_dir.join(".builder").join("preflight.json")
+}
+
+fn read_preflight(project_dir: &std::path::Path) -> Option<Value> {
+  let path = preflight_path(project_dir);
+  let txt = std::fs::read_to_string(path).ok()?;
+  serde_json::from_str(&txt).ok()
+}
+
+fn write_preflight(project_dir: &std::path::Path, cfg: &Value) -> Result<(), String> {
+  let path = preflight_path(project_dir);
+  if let Some(parent) = path.parent() {
+    let _ = std::fs::create_dir_all(parent);
+  }
+  let txt = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+  std::fs::write(&path, txt).map_err(|e| format!("{}: {}", path.display(), e))?;
+  Ok(())
+}
+
+fn preflight_is_complete(cfg: &Value) -> bool {
+  let completed = cfg.get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
+  let monetization_ok = matches!(cfg.get("monetization").and_then(|v| v.as_str()), Some("free") | Some("paid"));
+  let integrations_ok = cfg.get("integrations").map(|v| v.is_object()).unwrap_or(false);
+  completed && monetization_ok && integrations_ok
+}
+
 
 #[derive(Clone)]
 struct StepResult {
@@ -235,6 +265,21 @@ fn start_live_flutter(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_preflight_config(project: String) -> Result<Value, String> {
+  let repo_root = find_repo_root().ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  Ok(read_preflight(&project_dir).unwrap_or_else(|| json!({ "completed": false })))
+}
+
+#[tauri::command]
+fn set_preflight_config(project: String, config: Value) -> Result<(), String> {
+  let repo_root = find_repo_root().ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  write_preflight(&project_dir, &config)?;
+  Ok(())
+}
+
+#[tauri::command]
 fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: bool) -> Result<(), String> {
   let _ = app.emit("agent:log", format!("[backend] run_agent_stream project={} buildApk={}", project, build_apk));
   let _ = app.emit("agent:log", format!("[backend] prompt: {}", prompt));
@@ -248,6 +293,25 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
 
   let project_dir = repo_root.join("workspace").join("projects").join(&project);
   let run_path = project_dir.join("run.json");
+
+
+  // Preflight (MVP): require config before running phases
+  let cfg = read_preflight(&project_dir).unwrap_or_else(|| json!({ "completed": false }));
+  if !preflight_is_complete(&cfg) {
+    let msg = "Preflight required. Configure integrations first (Supabase/SendGrid + monetization) and set completed=true.";
+    let mut steps0: Vec<StepResult> = vec![];
+    steps0.push(StepResult {
+      name: "preflight".to_string(),
+      exit_code: 1,
+      error: Some(msg.to_string()),
+      output_tail: msg.to_string(),
+    });
+    write_run_json(&run_path, &project, build_apk, "failed", "preflight", &steps0, 0, msg)?;
+    let _ = app.emit("agent:log", format!("[preflight] {}", msg));
+    let _ = app.emit("agent:done", "needs_preflight");
+    return Ok(());
+  }
+
 
   let mut steps: Vec<StepResult> = vec![];
   let mut repair_attempts: i32 = 0;
@@ -343,7 +407,10 @@ fn main() {
       run_agent_stream,
       start_live_flutter,
       reveal_project,
-    read_run_json_project])
+    read_run_json_project,
+    get_preflight_config,
+    set_preflight_config,
+])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
