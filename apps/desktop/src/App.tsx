@@ -50,7 +50,7 @@ const [project, setProject] = useState("todo_flutter");
     if (!running) return;
     const t = setTimeout(() => {
       setRunning(false);
-      setLogs((prev) => [...prev, "[ui] ⚠️ running timeout -> reset to idle"]);
+      // (disabled) setLogs((prev) => [...prev, "[ui] ⚠️ running timeout -> reset to idle"]);
     }, 60_000);
     return () => clearTimeout(t);
   }, [running]);
@@ -100,6 +100,12 @@ const [project, setProject] = useState("todo_flutter");
         setLogs((prev) => [...prev, String(event.payload)]);
       }),
       listen<string>("agent:done", async (event) => {
+        // RESET_RUNNING_ON_DONE: always clear UI "running" state when backend finishes
+        try { setIsRunning(false); } catch {}
+        try { setRunning(false); } catch {}
+        try { setStatus("idle"); } catch {}
+        try { setRunState("idle"); } catch {}
+
 
 
         try {
