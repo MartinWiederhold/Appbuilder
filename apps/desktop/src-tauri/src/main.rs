@@ -1,10 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct RunConfig {
@@ -33,16 +34,29 @@ struct StepResult {
   name: String,
   exit_code: i32,
   error: Option<String>,
+  output_tail: String,
 }
-
-fn write_run_json(run_path: &std::path::Path, project: &str, build_apk: bool, status: &str, phase: &str, steps: &Vec<StepResult>) -> Result<(), String> {
-  let steps_val = steps.iter().map(|st| {
-    json!({
-      "name": st.name,
-      "exitCode": st.exit_code,
-      "error": st.error.clone().unwrap_or_default()
+fn write_run_json(
+  run_path: &std::path::Path,
+  project: &str,
+  build_apk: bool,
+  status: &str,
+  phase: &str,
+  steps: &Vec<StepResult>,
+  repair_attempts: i32,
+  last_error: &str
+) -> Result<(), String> {
+  let steps_val = steps
+    .iter()
+    .map(|st| {
+      json!({
+        "name": st.name,
+        "exitCode": st.exit_code,
+        "error": st.error.clone().unwrap_or_default(),
+        "outputTail": st.output_tail
+      })
     })
-  }).collect::<Vec<_>>();
+    .collect::<Vec<_>>();
 
   let exit_code = if status == "running" || status == "success" { 0 } else { 1 };
 
@@ -52,6 +66,8 @@ fn write_run_json(run_path: &std::path::Path, project: &str, build_apk: bool, st
     "exitCode": exit_code,
     "buildApk": build_apk,
     "phase": phase,
+    "repairAttempts": repair_attempts,
+    "lastError": last_error,
     "steps": steps_val
   });
 
@@ -63,56 +79,108 @@ fn write_run_json(run_path: &std::path::Path, project: &str, build_apk: bool, st
   Ok(())
 }
 
+
+fn attempt_repair(app: &tauri::AppHandle, project_dir: &std::path::Path) -> Vec<StepResult> {
+  let mut fixes: Vec<StepResult> = vec![];
+
+  let _ = app.emit("agent:log", "[repair] starting automatic repair...");
+
+  // Typical Flutter baseline fixes
+  fixes.push(run_step(app, project_dir, "repair_flutter_clean", "flutter", &["clean"]));
+  fixes.push(run_step(app, project_dir, "repair_flutter_pub_get", "flutter", &["pub", "get"]));
+
+  let _ = app.emit("agent:log", "[repair] finished automatic repair.");
+  fixes
+}
+
 fn run_step(app: &tauri::AppHandle, cwd: &std::path::Path, name: &str, cmd: &str, args: &[&str]) -> StepResult {
   let _ = app.emit("agent:log", format!("[phase:{}] $ {} {}", name, cmd, args.join(" ")));
 
   let mut child = match Command::new(cmd)
-      .current_dir(cwd)
-      .args(args)
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .spawn() {
-        Ok(c) => c,
-        Err(e) => {
-          return StepResult { name: name.to_string(), exit_code: 1, error: Some(format!("spawn failed: {}", e)) };
-        }
+    .current_dir(cwd)
+    .args(args)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+  {
+    Ok(c) => c,
+    Err(e) => {
+      return StepResult {
+        name: name.to_string(),
+        exit_code: 1,
+        error: Some(format!("spawn failed: {}", e)),
+        output_tail: format!("spawn failed: {}", e),
       };
+    }
+  };
+
+  let tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(220)));
 
   let stdout = child.stdout.take();
   let stderr = child.stderr.take();
 
+  // stdout thread
   if let Some(out) = stdout {
     let app2 = app.clone();
+    let tail2 = tail.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(out);
       for line in reader.lines().flatten() {
-        let _ = app2.emit("agent:log", line);
+        let _ = app2.emit("agent:log", line.clone());
+        let mut t = tail2.lock().unwrap();
+        if t.len() >= 200 { t.pop_front(); }
+        t.push_back(line);
       }
     });
   }
 
+  // stderr thread
   if let Some(err) = stderr {
     let app2 = app.clone();
+    let tail2 = tail.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(err);
       for line in reader.lines().flatten() {
-        let _ = app2.emit("agent:log", line);
+        let _ = app2.emit("agent:log", line.clone());
+        let mut t = tail2.lock().unwrap();
+        if t.len() >= 200 { t.pop_front(); }
+        t.push_back(line);
       }
     });
   }
 
-  match child.wait() {
-    Ok(st) => {
-      let code = st.code().unwrap_or(1);
-      StepResult {
+  let status = match child.wait() {
+    Ok(st) => st,
+    Err(e) => {
+      let out_tail = {
+        let t = tail.lock().unwrap();
+        t.iter().cloned().collect::<Vec<_>>().join("
+")
+      };
+      return StepResult {
         name: name.to_string(),
-        exit_code: code,
-        error: if code == 0 { None } else { Some("command failed".to_string()) }
-      }
+        exit_code: 1,
+        error: Some(format!("wait failed: {}", e)),
+        output_tail: if out_tail.is_empty() { format!("wait failed: {}", e) } else { out_tail },
+      };
     }
-    Err(e) => StepResult { name: name.to_string(), exit_code: 1, error: Some(format!("wait failed: {}", e)) },
+  };
+
+  let code = status.code().unwrap_or(1);
+  let out_tail = {
+    let t = tail.lock().unwrap();
+    t.iter().cloned().collect::<Vec<_>>().join("
+")
+  };
+
+  StepResult {
+    name: name.to_string(),
+    exit_code: code,
+    error: if code == 0 { None } else { Some("command failed".to_string()) },
+    output_tail: out_tail,
   }
 }
+
 
 
 
@@ -182,59 +250,82 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   let run_path = project_dir.join("run.json");
 
   let mut steps: Vec<StepResult> = vec![];
+  let mut repair_attempts: i32 = 0;
+  let mut last_error: String = "".to_string();
 
-  // Phase: feature_generate (placeholder for now)
+  // Phase: feature_generate (placeholder)
   let _ = app.emit("agent:log", "[phase:feature_generate] (placeholder) generating feature...");
-  steps.push(StepResult { name: "feature_generate".to_string(), exit_code: 0, error: None });
-  write_run_json(&run_path, &project, build_apk, "running", "feature_generate", &steps)?;
+  steps.push(StepResult { name: "feature_generate".to_string(), exit_code: 0, error: None, output_tail: "".to_string() });
+  write_run_json(&run_path, &project, build_apk, "running", "feature_generate", &steps, repair_attempts, &last_error)?;
+
+  // Helper closure to run a phase with auto-repair retries
+  let mut run_phase = |phase_name: &str, cmd: &str, args: &[&str]| -> Result<bool, String> {
+    // try up to 1 + 2 repairs = 3 total attempts
+    for attempt in 0..3 {
+      let st = run_step(&app, &project_dir, phase_name, cmd, args);
+      steps.push(st.clone());
+      write_run_json(&run_path, &project, build_apk, "running", phase_name, &steps, repair_attempts, &last_error)?;
+
+      if st.exit_code == 0 {
+        return Ok(true);
+      }
+
+      last_error = format!("[{}] failed (attempt {}):
+{}", phase_name, attempt + 1, st.output_tail);
+
+      // if we still have retries left, do repair then retry
+      if attempt < 2 {
+        repair_attempts += 1;
+        let fixes = attempt_repair(&app, &project_dir);
+        for fx in fixes {
+          steps.push(fx);
+        }
+        write_run_json(&run_path, &project, build_apk, "running", "repair", &steps, repair_attempts, &last_error)?;
+        continue;
+      } else {
+        // exhausted retries
+        return Ok(false);
+      }
+    }
+    Ok(false)
+  };
 
   // Phase: flutter_pub_get
-  let st = run_step(&app, &project_dir, "flutter_pub_get", "flutter", &["pub", "get"]);
-  steps.push(st.clone());
-  write_run_json(&run_path, &project, build_apk, "running", "flutter_pub_get", &steps)?;
-  if st.exit_code != 0 {
-    write_run_json(&run_path, &project, build_apk, "failed", "flutter_pub_get", &steps)?;
+  if !run_phase("flutter_pub_get", "flutter", &["pub", "get"])? {
+    write_run_json(&run_path, &project, build_apk, "failed", "flutter_pub_get", &steps, repair_attempts, &last_error)?;
     let _ = app.emit("agent:done", "failed");
     return Ok(());
   }
 
   // Phase: flutter_analyze
-  let st = run_step(&app, &project_dir, "flutter_analyze", "flutter", &["analyze"]);
-  steps.push(st.clone());
-  write_run_json(&run_path, &project, build_apk, "running", "flutter_analyze", &steps)?;
-  if st.exit_code != 0 {
-    write_run_json(&run_path, &project, build_apk, "failed", "flutter_analyze", &steps)?;
+  if !run_phase("flutter_analyze", "flutter", &["analyze"])? {
+    write_run_json(&run_path, &project, build_apk, "failed", "flutter_analyze", &steps, repair_attempts, &last_error)?;
     let _ = app.emit("agent:done", "failed");
     return Ok(());
   }
 
   // Phase: flutter_test
-  let st = run_step(&app, &project_dir, "flutter_test", "flutter", &["test"]);
-  steps.push(st.clone());
-  write_run_json(&run_path, &project, build_apk, "running", "flutter_test", &steps)?;
-  if st.exit_code != 0 {
-    write_run_json(&run_path, &project, build_apk, "failed", "flutter_test", &steps)?;
+  if !run_phase("flutter_test", "flutter", &["test"])? {
+    write_run_json(&run_path, &project, build_apk, "failed", "flutter_test", &steps, repair_attempts, &last_error)?;
     let _ = app.emit("agent:done", "failed");
     return Ok(());
   }
 
   // Optional: build apk
   if build_apk {
-    let st = run_step(&app, &project_dir, "flutter_build_apk", "flutter", &["build", "apk"]);
-    steps.push(st.clone());
-    write_run_json(&run_path, &project, build_apk, "running", "flutter_build_apk", &steps)?;
-    if st.exit_code != 0 {
-      write_run_json(&run_path, &project, build_apk, "failed", "flutter_build_apk", &steps)?;
+    if !run_phase("flutter_build_apk", "flutter", &["build", "apk"])? {
+      write_run_json(&run_path, &project, build_apk, "failed", "flutter_build_apk", &steps, repair_attempts, &last_error)?;
       let _ = app.emit("agent:done", "failed");
       return Ok(());
     }
   }
 
-  write_run_json(&run_path, &project, build_apk, "success", "done", &steps)?;
+  write_run_json(&run_path, &project, build_apk, "success", "done", &steps, repair_attempts, &last_error)?;
   let _ = app.emit("agent:log", format!("[backend] wrote run.json: {}", run_path.display()));
   let _ = app.emit("agent:done", "ok");
   Ok(())
 }
+
 
 
 
