@@ -105,6 +105,95 @@ SENDGRID_FROM_EMAIL={}
 }
 
 
+fn inject_flutter_dotenv(app: &tauri::AppHandle, project_dir: &std::path::Path) {
+  let pubspec_path = project_dir.join("pubspec.yaml");
+  let main_path = project_dir.join("lib").join("main.dart");
+  if !pubspec_path.exists() || !main_path.exists() {
+    let _ = app.emit("agent:log", "[dotenv] skip (pubspec/main.dart not found)");
+    return;
+  }
+
+  // --- pubspec.yaml: add dependency + asset ---
+  let mut pubspec = match std::fs::read_to_string(&pubspec_path) {
+    Ok(t) => t,
+    Err(_) => return,
+  };
+
+  if !pubspec.contains("flutter_dotenv:") {
+    if let Some(pos) = pubspec.find("dependencies:") {
+      // insert right after "dependencies:" line
+      if let Some(line_end) = pubspec[pos..].find('\n') {
+        let insert_at = pos + line_end + 1;
+        pubspec.insert_str(insert_at, "  flutter_dotenv: ^5.2.1\n");
+      }
+    }
+  }
+
+  // Ensure flutter: assets: - .env
+  if !pubspec.lines().any(|l| l.trim() == "- .env") {
+    if !pubspec.contains("\nflutter:\n") && !pubspec.starts_with("flutter:\n") {
+      pubspec.push_str("\nflutter:\n");
+    }
+    if pubspec.lines().any(|l| l.trim() == "assets:") {
+      // add under existing assets:
+      let mut out = Vec::new();
+      let mut injected = false;
+      for line in pubspec.lines() {
+        out.push(line.to_string());
+        if !injected && line.trim() == "assets:" {
+          out.push("    - .env".to_string());
+          injected = true;
+        }
+      }
+      pubspec = out.join("\n") + "\n";
+    } else {
+      // add assets block under flutter:
+      pubspec = pubspec.replace("flutter:\n", "flutter:\n  assets:\n    - .env\n");
+    }
+  }
+
+  let _ = std::fs::write(&pubspec_path, pubspec);
+
+  // --- main.dart: import + load dotenv ---
+  let mut main = match std::fs::read_to_string(&main_path) {
+    Ok(t) => t,
+    Err(_) => return,
+  };
+
+  if !main.contains("package:flutter_dotenv/flutter_dotenv.dart") {
+    // add import after last import
+    if let Some(last_import) = main.rmatch_indices("\nimport ").next().map(|(i, _)| i) {
+      // find end of that line
+      if let Some(end) = main[last_import+1..].find('\n') {
+        let ins = last_import + 1 + end + 1;
+        main.insert_str(ins, "import 'package:flutter_dotenv/flutter_dotenv.dart';\n");
+      } else {
+        main = format!("import 'package:flutter_dotenv/flutter_dotenv.dart';\n{}", main);
+      }
+    } else {
+      main = format!("import 'package:flutter_dotenv/flutter_dotenv.dart';\n{}", main);
+    }
+  }
+
+  // Make sure main() is async and loads dotenv
+  if main.contains("Future<void> main() async") {
+    if !main.contains("dotenv.load") {
+      main = main.replace("Future<void> main() async {", "Future<void> main() async {\n  WidgetsFlutterBinding.ensureInitialized();\n  await dotenv.load(fileName: '.env');\n");
+    }
+  } else if main.contains("void main()") {
+    // very simple transform (best-effort)
+    main = main.replace("void main()", "Future<void> main() async");
+    if !main.contains("dotenv.load") {
+      main = main.replace("Future<void> main() async {", "Future<void> main() async {\n  WidgetsFlutterBinding.ensureInitialized();\n  await dotenv.load(fileName: '.env');\n");
+    }
+  }
+
+  let _ = std::fs::write(&main_path, main);
+  let _ = app.emit("agent:log", format!("[dotenv] injected into {}", project_dir.display()));
+}
+
+
+
 
 #[derive(Clone)]
 struct StepResult {
@@ -342,6 +431,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
 
   // APPLY_PREFLIGHT_ENV
   apply_preflight_env(&app, &project_dir);
+  inject_flutter_dotenv(&app, &project_dir);
 
   let run_path = project_dir.join("run.json");
 
