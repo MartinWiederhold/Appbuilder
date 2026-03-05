@@ -161,7 +161,7 @@ function writeRunJson(payload) {
 
   // ---- BMAD 4.0.7: trigger flutter hot reload AFTER success ----
   try {
-    spawnSync("bash", ["scripts/flutter_hot_reload_osascript.sh"], { stdio: "ignore" });
+    spawnSync("bash", ["scripts/flutter_hot_reload.sh"], { stdio: "ignore" });
   } catch {}
   }
 
@@ -522,6 +522,53 @@ async function main() {
     const feature = detectFeature(prompt);
     if (feature === "todo_v1") {
       log(`[agent] feature=todo_v1 -> generating files + shared_preferences`);
+
+    } else if (feature === "builder_ui_v1") {
+      log(`[agent] feature=builder_ui_v1 -> patching builder_ui markers`);
+
+      // Very small, safe patcher: only touches lib/main.dart between AGENT_LOGS markers.
+      const mainPath = path.join(projectDir, "lib", "main.dart");
+      let main = fs.readFileSync(mainPath, "utf8");
+
+      const m = main.match(/AGENT_LOGS:BEGIN([\s\S]*?)AGENT_LOGS:END/);
+      if (!m) {
+        throw new Error("Missing AGENT_LOGS markers in lib/main.dart");
+      }
+
+      // Extract desired logs line from prompt: after "logs:" section or just use full prompt
+      let desired = prompt;
+
+      // If prompt contains a "logs:" section, use only that part
+      const lower = desired.toLowerCase();
+      const idxLogs = lower.indexOf("logs:");
+      if (idxLogs !== -1) {
+        desired = desired.slice(idxLogs + 5);
+      }
+
+      desired = desired.replace(/\r/g, "").trim();
+
+
+      // If user wrote a simple instruction, keep it short:
+      // Replace everything between markers with lines prefixed "- "
+      desired = desired
+        .split("\n")
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+        .slice(0, 6)
+        .map(l => l.startsWith("-") ? l : `- ${l}`)
+        .join("\n");
+
+      // Put into Dart string literal: escape newlines
+      desired = desired.replace(/\n/g, "\\n");
+
+      const replacement = `AGENT_LOGS:BEGIN\\n${desired}\\nAGENT_LOGS:END`;
+      main = main.replace(/AGENT_LOGS:BEGIN([\s\S]*?)AGENT_LOGS:END/, replacement);
+
+      fs.writeFileSync(mainPath, main, "utf8");
+      steps.push({ name: "feature_builder_ui_v1_patch", exitCode: 0 });
+      return;
+
+
       const pubspecPath = path.join(projectDir, "pubspec.yaml");
       const dep = ensureSharedPrefs(pubspecPath);
       log(`[agent] pubspec shared_preferences ${dep.mode} changed=${dep.changed}`);
@@ -624,7 +671,7 @@ async function main() {
     // AUTO_LIVE_TRIGGER
     if (finalExit === 0) {
       try {
-execSync(`bash "${repoRoot}/scripts/flutter_hot_reload_osascript.sh"`, { stdio: "inherit" });
+execSync(`bash "${repoRoot}/scripts/flutter_hot_reload.sh"`, { stdio: "inherit" });
         log("[agent] hot reload triggered");
         log("AGENT_STATUS:RELOAD_OK");
       } catch (e) {
