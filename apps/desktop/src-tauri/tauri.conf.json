@@ -1,4 +1,9 @@
 {
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    }
+  },
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Flutter Builder",
   "version": "0.1.0",

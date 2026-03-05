@@ -1,25 +1,29 @@
+export type RunStep = {
+  name?: string;
+  exitCode?: number;
+};
+
 export type RunJson = {
   status?: string;
-  exitCode?: number;
   lastStep?: string;
-  started?: string;
-  finished?: string;
+  exitCode?: number;
+  steps?: RunStep[];
 };
+
+function lastStepName(run: RunJson): string | null {
+  if (run.lastStep) return run.lastStep;
+  const steps = run.steps ?? [];
+  const last = steps.length ? steps[steps.length - 1] : null;
+  return last?.name ?? null;
+}
 
 export function deriveBmadPhase(run: RunJson | null, running: boolean): string {
   if (running) return "running";
   if (!run) return "idle";
 
-  // Strong signals first
-  const status = String(run.status || "").toLowerCase();
-  const exitCode = typeof run.exitCode === "number" ? run.exitCode : 0;
+  const step = lastStepName(run);
+  if (step) return String(step).split(" ")[0];
 
-  if (status === "success" && exitCode === 0) return "success";
-  if (status === "error" || exitCode > 0) return "error";
-
-  const step = (run.lastStep || "").trim();
-  if (!step) return status ? status : "idle";
-
-  // "flutter_test (exit=0)" -> "flutter_test"
-  return step.split(" ")[0].trim();
+  if (run.status) return String(run.status);
+  return "idle";
 }

@@ -32,7 +32,7 @@ fn find_repo_root() -> Option<std::path::PathBuf> {
 
 
 fn preflight_path(project_dir: &std::path::Path) -> std::path::PathBuf {
-  project_dir.join(".builder").join("preflight.json")
+  project_dir.join(".builder").join("SECURE_MODE")
 }
 
 fn read_preflight(project_dir: &std::path::Path) -> Option<Value> {
@@ -554,4 +554,10 @@ fn main() {
 ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+// ===== SECURE KEY LOADER =====
+fn load_llm_key() -> String {
+    std::env::var("LLM_KEY")
+        .expect("Missing LLM_KEY (set via Keychain bridge or ENV)")
 }
