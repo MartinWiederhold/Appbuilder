@@ -1,21 +1,14 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+STATE="$ROOT/.flutter_live"
+FIFO="$STATE/stdin"
 
-STATE="$(cd "$(dirname "$0")/.." && pwd)/.flutter_live"
-
-if [ ! -f "$STATE/pid" ]; then
-  echo "No running Flutter session"
+if [ ! -p "$FIFO" ]; then
+  echo "❌ No FIFO found at $FIFO (start live flutter first)"
   exit 1
 fi
 
-# If fifo is missing, treat as not running
-if [ ! -p "$STATE/stdin" ]; then
-  echo "No stdin fifo"
-  exit 1
-fi
-
-# Write hot reload command
-echo "r" > "$STATE/stdin"
-
-echo "Hot reload triggered"
-exit 0
+# send "r" to flutter run stdin
+printf "r\n" > "$FIFO"
+echo "✅ Hot reload triggered (fifo)"
