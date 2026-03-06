@@ -1,139 +1,65 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
-
-type BmadPhase = "B" | "M" | "A" | "D";
+import { invoke } from "@tauri-apps/api/core";
+import { deriveBmadPhase, type RunJson } from "./bmad_phase";
 
 export default function App() {
-  const [phase, setPhase] = useState<BmadPhase>("B");
-  const [prompt, setPrompt] = useState("");
-  const [logs, setLogs] = useState<string[]>([
-    "Flutter Builder • Ready",
-    "BMAD Phase: B (Business & Scope)",
-  ]);
+  const [run, setRun] = useState<RunJson | null>(null);
+  const [running, setRunning] = useState(false);
 
-  const phaseLabel = useMemo(() => {
-    switch (phase) {
-      case "B": return "B — Business & Scope";
-      case "M": return "M — Model & Architecture";
-      case "A": return "A — App Core";
-      case "D": return "D — Design & UX";
+  const phase = useMemo(() => deriveBmadPhase(run, running), [run, running]);
+
+  async function readRunJson() {
+    try {
+      const raw = await invoke<string>("read_run_json_project", {
+        project: "todo_flutter",
+      });
+      const json = JSON.parse(raw) as RunJson;
+      setRun(json);
+    } catch (e) {
+      console.error("read_run_json failed", e);
     }
-  }, [phase]);
-
-  function appendLog(line: string) {
-    setLogs((prev) => [...prev, line]);
   }
 
-  function onRun() {
-    const p = prompt.trim();
-    if (!p) return appendLog("⚠ Please enter a prompt first.");
-    appendLog(`▶ Prompt: ${p}`);
-    appendLog("…(wire to agent later)");
-    setPrompt("");
-  }
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void readRunJson();
+    }, 1000);
+    void readRunJson();
+    return () => window.clearInterval(id);
+  }, []);
 
-  function onMenuPick(v: string) {
-    appendLog(`☰ Menu: ${v} (hook later)`);
-  }
+  const phaseLabel =
+    phase === "success"
+      ? "Done"
+      : phase === "failed"
+      ? "Failed"
+      : phase === "running"
+      ? "Running"
+      : phase;
 
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brandDot" />
           <div>
             <div className="brandTitle">Flutter Builder</div>
-            <div className="brandSub">{phaseLabel}</div>
+            <div className="brandSub">BMAD Status: {phaseLabel}</div>
           </div>
         </div>
 
-        <div className="nav">
-          <div className="navItem active">Home</div>
-          <div className="navItem">Search</div>
-          <div className="navItem">Resources</div>
-        </div>
+        <div className="sectionTitle">Current phase</div>
+        <div className="recent">{phaseLabel}</div>
 
-        <div className="sectionTitle">Projects</div>
-        <div className="nav">
-          <div className="navItem">All projects</div>
-          <div className="navItem">Starred</div>
-          <div className="navItem">Created by me</div>
-          <div className="navItem">Shared with me</div>
-        </div>
-
-        <div className="sectionTitle">Recents</div>
-        <div className="recents">
-          <div className="recent">todo_flutter</div>
-          <div className="recent">project-alpha</div>
-          <div className="recent">vylo-z-rich-connect</div>
-        </div>
-
-        <div className="phaseBar">
-          <span>BMAD</span>
-          <div className="phaseBtns">
-            {(["B","M","A","D"] as const).map((p) => (
-              <button
-                key={p}
-                className={p === phase ? "chip chipActive" : "chip"}
-                onClick={() => { setPhase(p); appendLog(`Phase switched: ${p}`); }}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
+        <div className="sectionTitle">Last result</div>
+        <div className="recent">status: {run?.status ?? "n/a"}</div>
+        <div className="recent">lastStep: {run?.lastStep ?? "n/a"}</div>
+        <div className="recent">exitCode: {String(run?.exitCode ?? "n/a")}</div>
       </aside>
 
       <main className="main">
         <div className="hero">
           <div className="headline">Got an idea?</div>
-
-          <div className="promptCard">
-            <button className="plusBtn" title="Add" onClick={() => onMenuPick("Open menu")}>+</button>
-
-            <select
-              className="menuSelect"
-              defaultValue=""
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v) onMenuPick(v);
-                e.currentTarget.value = "";
-              }}
-            >
-              <option value="" disabled>Attach / Design / Connectors…</option>
-              <option value="Attach">Attach</option>
-              <option value="Design">Design</option>
-              <option value="Connectors">Connectors</option>
-            </select>
-
-            <input
-              className="promptInput"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Ask Builder to create…"
-              onKeyDown={(e) => { if (e.key === "Enter") onRun(); }}
-            />
-
-            <button className="sendBtn" title="Send" onClick={onRun}>↑</button>
-          </div>
-
-          <div className="hint">
-            Next: prompt → agent (BMAD) → generate/update workspace/projects/&lt;name&gt; → show diffs + preview
-          </div>
-        </div>
-
-        <div className="contentRow">
-          <section className="preview">
-            <div className="panelTitle">Live mockup</div>
-            <div className="panelBody">Preview kommt später.</div>
-          </section>
-
-          <section className="logs">
-            <div className="panelTitle">Logs</div>
-            <div className="panelBody mono">
-              {logs.map((l, i) => (<div key={i}>{l}</div>))}
-            </div>
-          </section>
         </div>
       </main>
     </div>
