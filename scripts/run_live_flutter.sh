@@ -5,7 +5,18 @@ PROJECTS="$ROOT/workspace/projects"
 STATE="$ROOT/.flutter_live"
 mkdir -p "$STATE"
 
-LATEST_PROJECT="$(ls -td "$PROJECTS"/*/ 2>/dev/null | head -n 1 || true)"
+TARGET_PROJECT="${1:-}"
+if [ -n "$TARGET_PROJECT" ]; then
+  TARGET_DIR="$PROJECTS/$TARGET_PROJECT"
+  if [ ! -d "$TARGET_DIR" ]; then
+    echo "❌ Project not found: $TARGET_DIR"
+    exit 1
+  fi
+  LATEST_PROJECT="$TARGET_DIR"
+else
+  LATEST_PROJECT="$(ls -td "$PROJECTS"/*/ 2>/dev/null | head -n 1 || true)"
+fi
+
 if [ -z "$LATEST_PROJECT" ]; then
   echo "❌ No Flutter project found under $PROJECTS"
   exit 1
@@ -13,7 +24,6 @@ fi
 
 cd "$LATEST_PROJECT"
 
-# kill old flutter (if any)
 if [ -f "$STATE/pid" ]; then
   OLD_PID="$(cat "$STATE/pid" || true)"
   if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" >/dev/null 2>&1; then

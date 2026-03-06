@@ -676,7 +676,7 @@ execSync(`bash "${repoRoot}/scripts/flutter_hot_reload.sh"`, { stdio: "inherit" 
         log("AGENT_STATUS:RELOAD_OK");
       } catch (e) {
         try {
-execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh"`, { stdio: "inherit" });
+execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh" "${project}"`, { stdio: "inherit" });
           log("[agent] live flutter started");
           log("AGENT_STATUS:LIVE_STARTED");
         } catch (e2) {
