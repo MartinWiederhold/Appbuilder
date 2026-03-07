@@ -17,13 +17,48 @@ function lastStepName(run: RunJson): string | null {
   return last?.name ?? null;
 }
 
-export function deriveBmadPhase(run: RunJson | null, running: boolean): string {
-  if (running) return "running";
+export function deriveBmadPhase(run: RunJson | null): string {
   if (!run) return "idle";
 
   const step = lastStepName(run);
-  if (step) return String(step).split(" ")[0];
 
-  if (run.status) return String(run.status);
+  if (run.status === "failed") return "failed";
+
+  switch (step) {
+    case "feature_generate":
+      return "generate";
+    case "flutter_pub_get":
+      return "pub_get";
+    case "flutter_analyze":
+      return "analyze";
+    case "flutter_test":
+      return "flutter_test";
+    default:
+      break;
+  }
+
+  if (run.status === "success") return "success";
+  if (run.status === "failed") return "failed";
   return "idle";
+}
+
+export function phaseLabel(phase: string): string {
+  switch (phase) {
+    case "idle":
+      return "Idle";
+    case "generate":
+      return "Generating";
+    case "pub_get":
+      return "Pub Get";
+    case "analyze":
+      return "Analyze";
+    case "flutter_test":
+      return "Test";
+    case "success":
+      return "Done";
+    case "failed":
+      return "Failed";
+    default:
+      return phase;
+  }
 }
