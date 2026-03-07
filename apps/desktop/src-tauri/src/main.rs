@@ -416,6 +416,79 @@ fn set_preflight_config(project: String, config: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn run_agent(app: AppHandle, project: String, prompt: String) -> Result<(), String> {
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let _ = app_handle.emit("agent:log", format!("[backend] run_agent project={}", project));
+        let _ = app_handle.emit("phase:update", "generate");
+
+        let repo_root = match find_repo_root() {
+            Some(p) => p,
+            None => {
+                let _ = app_handle.emit("agent:log", "[backend] Could not locate repo root");
+                let _ = app_handle.emit("agent:done", "error");
+                return;
+            }
+        };
+
+        let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
+
+        let output = Command::new("node")
+            .arg(agent_path)
+            .arg("--project")
+            .arg(&project)
+            .arg("--prompt")
+            .arg(&prompt)
+            .current_dir(&repo_root)
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+
+                for line in stdout.lines() {
+                    let line_s = line.to_string();
+                    let lower = line_s.to_lowercase();
+
+                    if lower.contains("feature=") || lower.contains("generating files") {
+                        let _ = app_handle.emit("phase:update", "generate");
+                    } else if lower.contains("$ flutter analyze") || lower.contains("analyzing ") {
+                        let _ = app_handle.emit("phase:update", "analyze");
+                    } else if lower.contains("$ flutter test") || lower.contains("all tests passed") || lower.contains("smoke test") {
+                        let _ = app_handle.emit("phase:update", "test");
+                    } else if lower.contains("hot reload triggered") || lower.contains("reload_ok") {
+                        let _ = app_handle.emit("phase:update", "reload");
+                    } else if lower.contains("wrote run.json status=success") {
+                        let _ = app_handle.emit("phase:update", "done");
+                    }
+
+                    let _ = app_handle.emit("agent:log", line_s);
+                }
+                for line in stderr.lines() {
+                    let _ = app_handle.emit("agent:log", format!("[stderr] {}", line));
+                }
+
+                if out.status.success() {
+                    let _ = app_handle.emit("phase:update", "done");
+                    let _ = app_handle.emit("agent:done", "ok");
+                } else {
+                    let _ = app_handle.emit("phase:update", "error");
+                    let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
+                }
+            }
+            Err(e) => {
+                let _ = app_handle.emit("phase:update", "error");
+                let _ = app_handle.emit("agent:log", format!("[backend] failed to start agent: {}", e));
+                let _ = app_handle.emit("agent:done", "error");
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: bool) -> Result<(), String> {
   let _ = app.emit("agent:log", format!("[backend] run_agent_stream project={} buildApk={}", project, build_apk));
   let _ = app.emit("agent:log", format!("[backend] prompt: {}", prompt));
@@ -543,15 +616,16 @@ fn main() {
       stop_after: "never".to_string(),
     })))
     .invoke_handler(tauri::generate_handler![
-      read_run_json,
-      set_run_config,
-      run_agent_stream,
-      start_live_flutter,
-      reveal_project,
-    read_run_json_project,
-    get_preflight_config,
-    set_preflight_config,
-])
+        read_run_json,
+        set_run_config,
+        run_agent_stream,
+        start_live_flutter,
+        reveal_project,
+        read_run_json_project,
+        get_preflight_config,
+        set_preflight_config,
+        run_agent
+    ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
