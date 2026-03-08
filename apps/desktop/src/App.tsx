@@ -4,16 +4,21 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
 type AgentLogPayload = string;
-type Phase = "idle" | "generate" | "analyze" | "test" | "reload" | "done" | "error";
+type Phase = "idle" | "generate" | "analyze" | "test" | "reload" | "done" | "paused" | "error";
 type Provider = "openai" | "anthropic";
+type RunMode = "full" | "step";
+type StopAfter = "none" | "registration" | "onboarding" | "core" | "design" | "finalize";
 
 export default function App() {
   const [project, setProject] = useState("todo_flutter");
   const [provider, setProvider] = useState<Provider>("openai");
+  const [mode, setMode] = useState<RunMode>("full");
+  const [stopAfter, setStopAfter] = useState<StopAfter>("none");
   const [prompt, setPrompt] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
+  const [pausedAt, setPausedAt] = useState<string>("");
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
@@ -24,13 +29,24 @@ export default function App() {
         setLogs((prev) => [...prev, line]);
       }),
       listen<string>("agent:done", (event) => {
-        const msg = `\n[done] ${String(event.payload)}`;
+        const payload = String(event.payload);
+        const msg = `\n[done] ${payload}`;
         setLogs((prev) => [...prev, msg]);
+
+        if (payload === "paused") {
+          setPhase("paused");
+          setPausedAt(stopAfter);
+        } else if (payload === "ok") {
+          setPhase((prev) => (prev === "paused" ? prev : "done"));
+        } else {
+          setPhase("error");
+        }
+
         setRunning(false);
       }),
       listen<string>("phase:update", (event) => {
         const next = String(event.payload) as Phase;
-        setPhase(next);
+        setPhase((prev) => (prev === "paused" ? prev : next));
       }),
     ];
 
@@ -39,18 +55,17 @@ export default function App() {
         try {
           const unlisten = await p;
           unlisten();
-        } catch {
-          // ignore
-        }
+        } catch {}
       });
     };
-  }, []);
+  }, [stopAfter]);
 
   async function onRun() {
     if (running) return;
     setLogs([]);
     setRunning(true);
     setPhase("idle");
+    setPausedAt("");
 
     const raw = prompt.replace(/\r\n/g, "\n");
 
@@ -58,6 +73,8 @@ export default function App() {
       await invoke("run_agent", {
         project,
         provider,
+        mode,
+        stopAfter,
         prompt: raw,
       });
     } catch (e) {
@@ -80,9 +97,8 @@ export default function App() {
     const order: Phase[] = ["idle", "generate", "analyze", "test", "reload", "done"];
     const currentIndex = order.indexOf(phase);
     const itemIndex = order.indexOf(item);
-
     const active = phase === item;
-    const completed = currentIndex > itemIndex && phase !== "error";
+    const completed = currentIndex > itemIndex && phase !== "error" && phase !== "paused";
 
     return {
       border: active ? "1px solid #ffffff" : "1px solid #333",
@@ -90,6 +106,13 @@ export default function App() {
       color: active ? "#000" : completed ? "#9ee37d" : "#bbb",
     };
   }
+
+  const statusText =
+    phase === "idle"
+      ? `Bereit · ${provider} · ${mode}`
+      : phase === "paused"
+      ? `Paused at: ${pausedAt || stopAfter}`
+      : `Phase: ${phase}`;
 
   return (
     <div
@@ -136,6 +159,47 @@ export default function App() {
           <option value="anthropic">anthropic</option>
         </select>
 
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as RunMode)}
+            style={{
+              width: "100%",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #333",
+              background: "#111",
+              color: "#fff",
+              fontSize: 14,
+            }}
+          >
+            <option value="full">full</option>
+            <option value="step">step</option>
+          </select>
+
+          <select
+            value={stopAfter}
+            onChange={(e) => setStopAfter(e.target.value as StopAfter)}
+            disabled={mode === "full"}
+            style={{
+              width: "100%",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #333",
+              background: mode === "full" ? "#0d0d0d" : "#111",
+              color: mode === "full" ? "#666" : "#fff",
+              fontSize: 14,
+            }}
+          >
+            <option value="none">none</option>
+            <option value="registration">registration</option>
+            <option value="onboarding">onboarding</option>
+            <option value="core">core</option>
+            <option value="design">design</option>
+            <option value="finalize">finalize</option>
+          </select>
+        </div>
+
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -174,7 +238,7 @@ export default function App() {
           </button>
 
           <div style={{ color: "#aaa", fontSize: 13 }}>
-            {phase === "idle" ? "Bereit" : `Phase: ${phase}`}
+            {statusText}
           </div>
         </div>
       </div>

@@ -78,6 +78,8 @@ const promptRaw = getArg("prompt", "");
 const project = getArg("project", "demo_project");
 const doBuildApk = getArg("build_apk", "0") === "1";
 const provider = getArg("provider", "openai");
+const mode = getArg("mode", "full");
+const stopAfter = getArg("stop_after", "none");
 
 function log(line) { process.stdout.write(line + "\n"); }
 function err(line) { process.stderr.write(line + "\n"); }
@@ -544,6 +546,8 @@ async function main() {
   log(`[agent] repoRoot=${repoRoot}`);
   log(`[agent] projectDir=${projectDir}`);
 log(`[agent] provider=${provider}`);
+log(`[agent] mode=${mode}`);
+log(`[agent] stop_after=${stopAfter}`);
 
 try {
   const providerInfo = await getProviderClient(provider);
@@ -694,6 +698,22 @@ try {
       const code = await run("flutter", ["test"], projectDir);
       steps.push({ name: "flutter_test", exitCode: code });
       if (code !== 0) { finalExit = code; throw new Error("flutter_test_failed"); }
+
+      if (mode === "step" && stopAfter === "registration") {
+        log("[agent] pause gate reached: registration");
+        console.log("AGENT_STATUS:PAUSED");
+        await writeRunJson({
+          status: "paused",
+          exitCode: 0,
+          steps,
+          meta: {
+            mode,
+            stop_after: stopAfter,
+            paused_at: "registration"
+          }
+        });
+        process.exit(0);
+      }
     }
 
     // optional build apk

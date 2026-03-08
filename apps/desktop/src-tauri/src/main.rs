@@ -416,10 +416,10 @@ fn set_preflight_config(project: String, config: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn run_agent(app: AppHandle, project: String, prompt: String, provider: String) -> Result<(), String> {
+fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, mode: String, stop_after: String) -> Result<(), String> {
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        let _ = app_handle.emit("agent:log", format!("[backend] run_agent project={} provider={}", project, provider));
+        let _ = app_handle.emit("agent:log", format!("[backend] run_agent project={} provider={} mode={} stop_after={}", project, provider, mode, stop_after));
         let _ = app_handle.emit("phase:update", "generate");
 
         let repo_root = match find_repo_root() {
@@ -439,6 +439,10 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String) 
             .arg(&project)
             .arg("--provider")
             .arg(&provider)
+            .arg("--mode")
+            .arg(&mode)
+            .arg("--stop_after")
+            .arg(&stop_after)
             .arg("--prompt")
             .arg(&prompt)
             .current_dir(&repo_root)
@@ -461,6 +465,8 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String) 
                         let _ = app_handle.emit("phase:update", "test");
                     } else if lower.contains("hot reload triggered") || lower.contains("reload_ok") {
                         let _ = app_handle.emit("phase:update", "reload");
+                    } else if lower.contains("agent_status:paused") {
+                        let _ = app_handle.emit("phase:update", "done");
                     } else if lower.contains("wrote run.json status=success") {
                         let _ = app_handle.emit("phase:update", "done");
                     }
@@ -472,8 +478,12 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String) 
                 }
 
                 if out.status.success() {
-                    let _ = app_handle.emit("phase:update", "done");
-                    let _ = app_handle.emit("agent:done", "ok");
+                    if stdout.to_lowercase().contains("agent_status:paused") {
+                        let _ = app_handle.emit("agent:done", "paused");
+                    } else {
+                        let _ = app_handle.emit("phase:update", "done");
+                        let _ = app_handle.emit("agent:done", "ok");
+                    }
                 } else {
                     let _ = app_handle.emit("phase:update", "error");
                     let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
