@@ -60,12 +60,12 @@ export default function App() {
     };
   }, [stopAfter]);
 
-  async function onRun() {
+  async function startRun(runMode: RunMode, runStopAfter: StopAfter) {
     if (running) return;
+
     setLogs([]);
     setRunning(true);
     setPhase("idle");
-    setPausedAt("");
 
     const raw = prompt.replace(/\r\n/g, "\n");
 
@@ -73,8 +73,8 @@ export default function App() {
       await invoke("run_agent", {
         project,
         provider,
-        mode,
-        stopAfter,
+        mode: runMode,
+        stopAfter: runStopAfter,
         prompt: raw,
       });
     } catch (e) {
@@ -83,6 +83,17 @@ export default function App() {
       setPhase("error");
       setRunning(false);
     }
+  }
+
+  async function onRun() {
+    setPausedAt("");
+    await startRun(mode, stopAfter);
+  }
+
+  async function onApproveContinue() {
+    if (running) return;
+    setPausedAt("");
+    await startRun("full", "none");
   }
 
   const phaseItems: Array<{ key: Phase; label: string }> = [
@@ -220,7 +231,7 @@ export default function App() {
           }}
         />
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={onRun}
             disabled={running}
@@ -236,6 +247,24 @@ export default function App() {
           >
             {running ? "Running…" : "Run"}
           </button>
+
+          {phase === "paused" && (
+            <button
+              onClick={onApproveContinue}
+              disabled={running}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#9ee37d",
+                color: "#000",
+                cursor: running ? "not-allowed" : "pointer",
+                fontWeight: 700,
+              }}
+            >
+              Approve & Continue
+            </button>
+          )}
 
           <div style={{ color: "#aaa", fontSize: 13 }}>
             {statusText}
