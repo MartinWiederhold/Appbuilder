@@ -1,10 +1,70 @@
 #!/usr/bin/env node
+import { getProviderClient } from "./providers/index.mjs";
+import { setSecret, getSecret, deleteSecret, listSecretNames } from "./security/secrets.mjs";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 globalThis.__filesChanged = false;
+
+const argv = process.argv.slice(2);
+
+async function maybeHandleSecretsCli() {
+  if (argv[0] !== "secrets") return false;
+
+  const cmd = argv[1];
+  const name = argv[2];
+  const value = argv[3];
+
+  if (cmd === "set") {
+    if (!name || !value) {
+      console.error("Usage: node packages/agent/src/cli.mjs secrets set NAME VALUE");
+      process.exit(1);
+    }
+    await setSecret(name, value);
+    console.log(`[secrets] stored ${name}`);
+    return true;
+  }
+
+  if (cmd === "get") {
+    if (!name) {
+      console.error("Usage: node packages/agent/src/cli.mjs secrets get NAME");
+      process.exit(1);
+    }
+    const v = await getSecret(name);
+    console.log(v ? `[secrets] found ${name}` : `[secrets] missing ${name}`);
+    return true;
+  }
+
+  if (cmd === "list") {
+    const names = await listSecretNames();
+    if (!names.length) {
+      console.log("[secrets] empty");
+    } else {
+      for (const n of names) console.log(n);
+    }
+    return true;
+  }
+
+  if (cmd === "delete") {
+    if (!name) {
+      console.error("Usage: node packages/agent/src/cli.mjs secrets delete NAME");
+      process.exit(1);
+    }
+    await deleteSecret(name);
+    console.log(`[secrets] deleted ${name}`);
+    return true;
+  }
+
+  console.error("Usage: node packages/agent/src/cli.mjs secrets <set|get|list|delete> ...");
+  process.exit(1);
+}
+
+if (await maybeHandleSecretsCli()) {
+  process.exit(0);
+}
+
 
 
 function getArg(name, fallback = "") {
@@ -17,6 +77,7 @@ function getArg(name, fallback = "") {
 const promptRaw = getArg("prompt", "");
 const project = getArg("project", "demo_project");
 const doBuildApk = getArg("build_apk", "0") === "1";
+const provider = getArg("provider", "openai");
 
 function log(line) { process.stdout.write(line + "\n"); }
 function err(line) { process.stderr.write(line + "\n"); }
@@ -482,6 +543,15 @@ async function main() {
   log(`[agent] prompt=${prompt || "(empty)"}`);
   log(`[agent] repoRoot=${repoRoot}`);
   log(`[agent] projectDir=${projectDir}`);
+log(`[agent] provider=${provider}`);
+
+try {
+  const providerInfo = await getProviderClient(provider);
+  log(`[agent] provider_ready=${providerInfo.provider}`);
+} catch (e) {
+  err(`[agent] provider_error=${e.message}`);
+  process.exit(1);
+}
   log(`[agent] build_apk=${doBuildApk ? "1" : "0"}`);
 
   fs.mkdirSync(projectDir, { recursive: true });
