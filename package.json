@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "keytar": "^7.9.0",
     "openai": "^6.27.0"
   }

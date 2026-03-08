@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { getSecret } from "../security/secrets.mjs";
 
 export async function getProviderClient(provider = "openai") {
@@ -22,7 +23,7 @@ export async function getProviderClient(provider = "openai") {
 
     return {
       provider: "anthropic",
-      client: null,
+      client: new Anthropic({ apiKey }),
     };
   }
 
