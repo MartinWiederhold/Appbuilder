@@ -68,7 +68,18 @@ export default function App() {
     const unlistenPromises = [
       listen<AgentLogPayload>("agent:log", (event) => {
         const line = String(event.payload);
+        const lower = line.toLowerCase();
+
         setLogs((prev) => [...prev, line]);
+
+        if (
+          lower.includes("missing openai_api_key") ||
+          lower.includes("missing anthropic_api_key")
+        ) {
+          setPhase("error");
+          setRunning(false);
+          refreshSecrets();
+        }
       }),
       listen<string>("agent:done", (event) => {
         const payload = String(event.payload);
@@ -128,6 +139,13 @@ export default function App() {
   }
 
   async function onRun() {
+    if (!providerSecretPresent) {
+      setLogs((prev) => [...prev, `[ui] missing required secret: ${requiredSecretName}`]);
+      setPhase("error");
+      await refreshSecrets();
+      return;
+    }
+
     setPausedAt("");
     await startRun(mode, stopAfter);
   }
@@ -352,9 +370,9 @@ export default function App() {
               padding: "10px 14px",
               borderRadius: 10,
               border: "1px solid #333",
-              background: running ? "#222" : "#fff",
-              color: running ? "#aaa" : "#000",
-              cursor: running ? "not-allowed" : "pointer",
+              background: running || !providerSecretPresent ? "#222" : "#fff",
+              color: running || !providerSecretPresent ? "#888" : "#000",
+              cursor: running || !providerSecretPresent ? "not-allowed" : "pointer",
               fontWeight: 600,
             }}
           >
