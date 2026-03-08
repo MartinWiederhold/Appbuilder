@@ -643,7 +643,4 @@ fn main() {
 }
 
 // ===== SECURE KEY LOADER =====
-fn load_llm_key() -> String {
-    std::env::var("LLM_KEY")
-        .expect("Missing LLM_KEY (set via Keychain bridge or ENV)")
-}
+

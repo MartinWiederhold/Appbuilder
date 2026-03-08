@@ -11,11 +11,21 @@ globalThis.__filesChanged = false;
 const argv = process.argv.slice(2);
 
 async function maybeHandleSecretsCli() {
-  if (argv[0] !== "secrets") return false;
+  let cmd = "";
+  let name = "";
+  let value = "";
 
-  const cmd = argv[1];
-  const name = argv[2];
-  const value = argv[3];
+  if (argv[0] === "secrets") {
+    cmd = argv[1] ?? "";
+    name = argv[2] ?? "";
+    value = argv[3] ?? "";
+  } else if (typeof argv[0] === "string" && argv[0].startsWith("secrets:")) {
+    cmd = argv[0].slice("secrets:".length);
+    name = argv[1] ?? "";
+    value = argv[2] ?? "";
+  } else {
+    return false;
+  }
 
   if (cmd === "set") {
     if (!name || !value) {
