@@ -20,7 +20,49 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [pausedAt, setPausedAt] = useState<string>("");
 
+  const [secretNames, setSecretNames] = useState<string[]>([]);
+  const [secretInput, setSecretInput] = useState("");
+  const [secretBusy, setSecretBusy] = useState(false);
+
   const logText = useMemo(() => logs.join("\n"), [logs]);
+
+  const requiredSecretName =
+    provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+
+  const providerSecretPresent = secretNames.includes(requiredSecretName);
+
+  async function refreshSecrets() {
+    try {
+      const names = await invoke<string[]>("list_secrets");
+      setSecretNames(Array.isArray(names) ? names : []);
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] list_secrets failed: ${String(e)}`]);
+    }
+  }
+
+  async function onSaveSecret() {
+    const value = secretInput.trim();
+    if (!value || secretBusy) return;
+
+    try {
+      setSecretBusy(true);
+      await invoke("set_secret", {
+        name: requiredSecretName,
+        value,
+      });
+      setSecretInput("");
+      setLogs((prev) => [...prev, `[ui] stored secret ${requiredSecretName}`]);
+      await refreshSecrets();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] set_secret failed: ${String(e)}`]);
+    } finally {
+      setSecretBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshSecrets();
+  }, []);
 
   useEffect(() => {
     const unlistenPromises = [
@@ -170,6 +212,77 @@ export default function App() {
           <option value="anthropic">anthropic</option>
         </select>
 
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#111",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>
+            Secret Status
+          </div>
+
+          <div style={{ fontSize: 12, color: providerSecretPresent ? "#9ee37d" : "#ffb86b" }}>
+            {providerSecretPresent
+              ? `${requiredSecretName} vorhanden`
+              : `${requiredSecretName} fehlt`}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8 }}>
+            <input
+              type="password"
+              value={secretInput}
+              onChange={(e) => setSecretInput(e.target.value)}
+              placeholder={`Paste ${requiredSecretName}`}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#0d0d0d",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            />
+
+            <button
+              onClick={onSaveSecret}
+              disabled={secretBusy || !secretInput.trim()}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: secretBusy || !secretInput.trim() ? "#222" : "#fff",
+                color: secretBusy || !secretInput.trim() ? "#888" : "#000",
+                cursor: secretBusy || !secretInput.trim() ? "not-allowed" : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Save Key
+            </button>
+
+            <button
+              onClick={refreshSecrets}
+              disabled={secretBusy}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#1a1a1a",
+                color: "#fff",
+                cursor: secretBusy ? "not-allowed" : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <select
             value={mode}
@@ -234,7 +347,7 @@ export default function App() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={onRun}
-            disabled={running}
+            disabled={running || !providerSecretPresent}
             style={{
               padding: "10px 14px",
               borderRadius: 10,
