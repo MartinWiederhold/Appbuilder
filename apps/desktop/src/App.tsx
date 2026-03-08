@@ -5,9 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 type AgentLogPayload = string;
 type Phase = "idle" | "generate" | "analyze" | "test" | "reload" | "done" | "error";
+type Provider = "openai" | "anthropic";
 
 export default function App() {
   const [project, setProject] = useState("todo_flutter");
+  const [provider, setProvider] = useState<Provider>("openai");
   const [prompt, setPrompt] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
@@ -55,6 +57,7 @@ export default function App() {
     try {
       await invoke("run_agent", {
         project,
+        provider,
         prompt: raw,
       });
     } catch (e) {
@@ -115,6 +118,23 @@ export default function App() {
             fontSize: 14,
           }}
         />
+
+        <select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value as Provider)}
+          style={{
+            width: "100%",
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#111",
+            color: "#fff",
+            fontSize: 14,
+          }}
+        >
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+        </select>
 
         <textarea
           value={prompt}

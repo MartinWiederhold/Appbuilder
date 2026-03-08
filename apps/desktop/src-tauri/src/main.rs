@@ -416,10 +416,10 @@ fn set_preflight_config(project: String, config: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn run_agent(app: AppHandle, project: String, prompt: String) -> Result<(), String> {
+fn run_agent(app: AppHandle, project: String, prompt: String, provider: String) -> Result<(), String> {
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        let _ = app_handle.emit("agent:log", format!("[backend] run_agent project={}", project));
+        let _ = app_handle.emit("agent:log", format!("[backend] run_agent project={} provider={}", project, provider));
         let _ = app_handle.emit("phase:update", "generate");
 
         let repo_root = match find_repo_root() {
@@ -437,6 +437,8 @@ fn run_agent(app: AppHandle, project: String, prompt: String) -> Result<(), Stri
             .arg(agent_path)
             .arg("--project")
             .arg(&project)
+            .arg("--provider")
+            .arg(&provider)
             .arg("--prompt")
             .arg(&prompt)
             .current_dir(&repo_root)
