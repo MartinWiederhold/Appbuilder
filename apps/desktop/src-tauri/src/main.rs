@@ -53,9 +53,67 @@ fn write_preflight(project_dir: &std::path::Path, cfg: &Value) -> Result<(), Str
 
 fn preflight_is_complete(cfg: &Value) -> bool {
   let completed = cfg.get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
-  let monetization_ok = matches!(cfg.get("monetization").and_then(|v| v.as_str()), Some("free") | Some("paid"));
-  let integrations_ok = cfg.get("integrations").map(|v| v.is_object()).unwrap_or(false);
-  completed && monetization_ok && integrations_ok
+  let monetization_ok =
+    matches!(cfg.get("monetization").and_then(|v| v.as_str()), Some("free") | Some("paid"));
+
+  let integrations = match cfg.get("integrations").and_then(|v| v.as_object()) {
+    Some(v) => v,
+    None => return false,
+  };
+
+  if !completed || !monetization_ok {
+    return false;
+  }
+
+  let supabase_ok = match integrations.get("supabase").and_then(|v| v.as_object()) {
+    Some(supabase) => {
+      let enabled = supabase.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+      if !enabled {
+        true
+      } else {
+        let url_ok = supabase
+          .get("url")
+          .and_then(|v| v.as_str())
+          .map(|s| !s.trim().is_empty())
+          .unwrap_or(false);
+
+        let anon_ok = supabase
+          .get("anonKey")
+          .and_then(|v| v.as_str())
+          .map(|s| !s.trim().is_empty())
+          .unwrap_or(false);
+
+        url_ok && anon_ok
+      }
+    }
+    None => true,
+  };
+
+  let sendgrid_ok = match integrations.get("sendgrid").and_then(|v| v.as_object()) {
+    Some(sendgrid) => {
+      let enabled = sendgrid.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+      if !enabled {
+        true
+      } else {
+        let api_key_ok = sendgrid
+          .get("apiKey")
+          .and_then(|v| v.as_str())
+          .map(|s| !s.trim().is_empty())
+          .unwrap_or(false);
+
+        let from_email_ok = sendgrid
+          .get("fromEmail")
+          .and_then(|v| v.as_str())
+          .map(|s| !s.trim().is_empty())
+          .unwrap_or(false);
+
+        api_key_ok && from_email_ok
+      }
+    }
+    None => true,
+  };
+
+  supabase_ok && sendgrid_ok
 }
 
 
