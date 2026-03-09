@@ -415,6 +415,50 @@ fn set_preflight_config(project: String, config: Value) -> Result<(), String> {
   Ok(())
 }
 
+
+
+#[tauri::command]
+fn list_secrets(app: AppHandle) -> Result<Vec<String>, String> {
+    let repo_root = find_repo_root().ok_or_else(|| "repo root not found".to_string())?;
+    let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
+
+    let out = std::process::Command::new("node")
+        .arg(agent_path)
+        .arg("secrets:list")
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !out.status.success() {
+        return Err("failed to list secrets".into());
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let names = stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    Ok(names)
+}
+
+#[tauri::command]
+fn set_secret(app: AppHandle, name: String, value: String) -> Result<(), String> {
+    let repo_root = find_repo_root().ok_or_else(|| "repo root not found".to_string())?;
+    let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
+
+    let status = std::process::Command::new("node")
+        .arg(agent_path)
+        .arg("secrets:set")
+        .arg(&name)
+        .arg(&value)
+        .current_dir(&repo_root)
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("failed to set secret".into())
+    }
+}
+
 #[tauri::command]
 fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, mode: String, stop_after: String) -> Result<(), String> {
     let app_handle = app.clone();
@@ -430,6 +474,16 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, 
                 return;
             }
         };
+
+        let project_dir = repo_root.join("workspace").join("projects").join(&project);
+        let cfg = read_preflight(&project_dir).unwrap_or_else(|| json!({ "completed": false }));
+
+        if !preflight_is_complete(&cfg) {
+            let _ = app_handle.emit("agent:log", "[backend] preflight incomplete: run blocked");
+            let _ = app_handle.emit("phase:update", "error");
+            let _ = app_handle.emit("agent:done", "needs_preflight");
+            return;
+        }
 
         let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
 
@@ -631,6 +685,8 @@ fn main() {
         read_run_json,
         set_run_config,
         run_agent_stream,
+        list_secrets,
+        set_secret,
         start_live_flutter,
         reveal_project,
         read_run_json_project,
