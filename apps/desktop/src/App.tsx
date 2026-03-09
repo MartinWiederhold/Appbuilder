@@ -20,10 +20,27 @@ type SessionState = {
   prompt: string;
 };
 
+type SupabaseConfig = {
+  enabled?: boolean;
+  url?: string;
+  anonKey?: string;
+};
+
+type SendgridConfig = {
+  enabled?: boolean;
+  apiKey?: string;
+  fromEmail?: string;
+};
+
+type IntegrationsConfig = {
+  supabase?: SupabaseConfig;
+  sendgrid?: SendgridConfig;
+};
+
 type PreflightConfig = {
   completed?: boolean;
   monetization?: string;
-  integrations?: Record<string, unknown>;
+  integrations?: IntegrationsConfig;
 };
 
 function loadSession(): SessionState | null {
@@ -59,14 +76,30 @@ function saveSession(state: SessionState) {
 
 function isPreflightComplete(cfg: PreflightConfig | null): boolean {
   if (!cfg) return false;
+
   const completed = cfg.completed === true;
   const monetizationOk = cfg.monetization === "free" || cfg.monetization === "paid";
-  const integrationsOk =
-    !!cfg.integrations &&
+  const integrations =
+    cfg.integrations &&
     typeof cfg.integrations === "object" &&
-    !Array.isArray(cfg.integrations);
+    !Array.isArray(cfg.integrations)
+      ? cfg.integrations
+      : null;
 
-  return completed && monetizationOk && integrationsOk;
+  if (!completed || !monetizationOk || !integrations) return false;
+
+  const supabase = integrations.supabase;
+  const sendgrid = integrations.sendgrid;
+
+  const supabaseOk =
+    !supabase?.enabled ||
+    (!!supabase.url?.trim() && !!supabase.anonKey?.trim());
+
+  const sendgridOk =
+    !sendgrid?.enabled ||
+    (!!sendgrid.apiKey?.trim() && !!sendgrid.fromEmail?.trim());
+
+  return supabaseOk && sendgridOk;
 }
 
 export default function App() {
@@ -94,6 +127,14 @@ export default function App() {
   const [monetizationInput, setMonetizationInput] = useState<Monetization>("unset");
   const [completedInput, setCompletedInput] = useState(false);
 
+  const [supabaseEnabled, setSupabaseEnabled] = useState(false);
+  const [supabaseUrl, setSupabaseUrl] = useState("");
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState("");
+
+  const [sendgridEnabled, setSendgridEnabled] = useState(false);
+  const [sendgridApiKey, setSendgridApiKey] = useState("");
+  const [sendgridFromEmail, setSendgridFromEmail] = useState("");
+
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   const requiredSecretName =
@@ -117,17 +158,34 @@ export default function App() {
       const cfg = await invoke<PreflightConfig>("get_preflight_config", { project });
       const nextCfg = cfg ?? null;
       setPreflightConfig(nextCfg);
+
       setMonetizationInput(
         nextCfg?.monetization === "free" || nextCfg?.monetization === "paid"
           ? (nextCfg.monetization as Monetization)
           : "unset"
       );
       setCompletedInput(nextCfg?.completed === true);
+
+      const supabase = nextCfg?.integrations?.supabase;
+      setSupabaseEnabled(supabase?.enabled === true);
+      setSupabaseUrl(typeof supabase?.url === "string" ? supabase.url : "");
+      setSupabaseAnonKey(typeof supabase?.anonKey === "string" ? supabase.anonKey : "");
+
+      const sendgrid = nextCfg?.integrations?.sendgrid;
+      setSendgridEnabled(sendgrid?.enabled === true);
+      setSendgridApiKey(typeof sendgrid?.apiKey === "string" ? sendgrid.apiKey : "");
+      setSendgridFromEmail(typeof sendgrid?.fromEmail === "string" ? sendgrid.fromEmail : "");
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] get_preflight_config failed: ${String(e)}`]);
       setPreflightConfig(null);
       setMonetizationInput("unset");
       setCompletedInput(false);
+      setSupabaseEnabled(false);
+      setSupabaseUrl("");
+      setSupabaseAnonKey("");
+      setSendgridEnabled(false);
+      setSendgridApiKey("");
+      setSendgridFromEmail("");
     } finally {
       setPreflightBusy(false);
     }
@@ -139,17 +197,21 @@ export default function App() {
     try {
       setPreflightSaveBusy(true);
 
-      const existingIntegrations =
-        preflightConfig?.integrations &&
-        typeof preflightConfig.integrations === "object" &&
-        !Array.isArray(preflightConfig.integrations)
-          ? preflightConfig.integrations
-          : {};
-
       const nextConfig: PreflightConfig = {
         completed: completedInput,
         monetization: monetizationInput === "unset" ? "unset" : monetizationInput,
-        integrations: existingIntegrations,
+        integrations: {
+          supabase: {
+            enabled: supabaseEnabled,
+            url: supabaseUrl.trim(),
+            anonKey: supabaseAnonKey.trim(),
+          },
+          sendgrid: {
+            enabled: sendgridEnabled,
+            apiKey: sendgridApiKey.trim(),
+            fromEmail: sendgridFromEmail.trim(),
+          },
+        },
       };
 
       await invoke("set_preflight_config", {
@@ -520,6 +582,126 @@ export default function App() {
               />
               completed
             </label>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              padding: 10,
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "#0d0d0d",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700 }}>Supabase</div>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                color: "#fff",
+                fontSize: 13,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={supabaseEnabled}
+                onChange={(e) => setSupabaseEnabled(e.target.checked)}
+              />
+              enabled
+            </label>
+
+            <input
+              value={supabaseUrl}
+              onChange={(e) => setSupabaseUrl(e.target.value)}
+              placeholder="Supabase URL"
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#111",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            />
+
+            <input
+              value={supabaseAnonKey}
+              onChange={(e) => setSupabaseAnonKey(e.target.value)}
+              placeholder="Supabase anon key"
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#111",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            />
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              padding: 10,
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "#0d0d0d",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700 }}>SendGrid</div>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                color: "#fff",
+                fontSize: 13,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={sendgridEnabled}
+                onChange={(e) => setSendgridEnabled(e.target.checked)}
+              />
+              enabled
+            </label>
+
+            <input
+              value={sendgridApiKey}
+              onChange={(e) => setSendgridApiKey(e.target.value)}
+              placeholder="SendGrid API key"
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#111",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            />
+
+            <input
+              value={sendgridFromEmail}
+              onChange={(e) => setSendgridFromEmail(e.target.value)}
+              placeholder="SendGrid from email"
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#111",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            />
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
