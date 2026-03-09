@@ -19,6 +19,12 @@ type SessionState = {
   prompt: string;
 };
 
+type PreflightConfig = {
+  completed?: boolean;
+  monetization?: string;
+  integrations?: Record<string, unknown>;
+};
+
 function loadSession(): SessionState | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -50,6 +56,18 @@ function saveSession(state: SessionState) {
   } catch {}
 }
 
+function isPreflightComplete(cfg: PreflightConfig | null): boolean {
+  if (!cfg) return false;
+  const completed = cfg.completed === true;
+  const monetizationOk = cfg.monetization === "free" || cfg.monetization === "paid";
+  const integrationsOk =
+    !!cfg.integrations &&
+    typeof cfg.integrations === "object" &&
+    !Array.isArray(cfg.integrations);
+
+  return completed && monetizationOk && integrationsOk;
+}
+
 export default function App() {
   const initialSession = loadSession();
 
@@ -69,12 +87,16 @@ export default function App() {
   const [secretInput, setSecretInput] = useState("");
   const [secretBusy, setSecretBusy] = useState(false);
 
+  const [preflightConfig, setPreflightConfig] = useState<PreflightConfig | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   const requiredSecretName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
 
   const providerSecretPresent = secretNames.includes(requiredSecretName);
+  const preflightComplete = isPreflightComplete(preflightConfig);
 
   async function refreshSecrets() {
     try {
@@ -82,6 +104,19 @@ export default function App() {
       setSecretNames(Array.isArray(names) ? names : []);
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] list_secrets failed: ${String(e)}`]);
+    }
+  }
+
+  async function refreshPreflight() {
+    try {
+      setPreflightBusy(true);
+      const cfg = await invoke<PreflightConfig>("get_preflight_config", { project });
+      setPreflightConfig(cfg ?? null);
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] get_preflight_config failed: ${String(e)}`]);
+      setPreflightConfig(null);
+    } finally {
+      setPreflightBusy(false);
     }
   }
 
@@ -108,6 +143,10 @@ export default function App() {
   useEffect(() => {
     refreshSecrets();
   }, []);
+
+  useEffect(() => {
+    refreshPreflight();
+  }, [project]);
 
   useEffect(() => {
     saveSession({
@@ -204,6 +243,13 @@ export default function App() {
       setLogs((prev) => [...prev, `[ui] missing required secret: ${requiredSecretName}`]);
       setPhase("error");
       await refreshSecrets();
+      return;
+    }
+
+    if (!preflightComplete) {
+      setLogs((prev) => [...prev, "[ui] preflight incomplete: run blocked"]);
+      setPhase("error");
+      await refreshPreflight();
       return;
     }
 
@@ -362,6 +408,47 @@ export default function App() {
           </div>
         </div>
 
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#111",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>
+            Preflight Status
+          </div>
+
+          <div style={{ fontSize: 12, color: preflightComplete ? "#9ee37d" : "#ffb86b" }}>
+            {preflightComplete ? "Preflight vollständig" : "Preflight unvollständig"}
+          </div>
+
+          <div style={{ fontSize: 12, color: "#aaa" }}>
+            monetization: {preflightConfig?.monetization ?? "unset"} · completed:{" "}
+            {preflightConfig?.completed ? "true" : "false"}
+          </div>
+
+          <button
+            onClick={refreshPreflight}
+            disabled={preflightBusy}
+            style={{
+              width: "fit-content",
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: preflightBusy ? "#222" : "#1a1a1a",
+              color: preflightBusy ? "#888" : "#fff",
+              cursor: preflightBusy ? "not-allowed" : "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Refresh Preflight
+          </button>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <select
             value={mode}
@@ -426,14 +513,14 @@ export default function App() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={onRun}
-            disabled={running || !providerSecretPresent}
+            disabled={running || !providerSecretPresent || !preflightComplete}
             style={{
               padding: "10px 14px",
               borderRadius: 10,
               border: "1px solid #333",
-              background: running || !providerSecretPresent ? "#222" : "#fff",
-              color: running || !providerSecretPresent ? "#888" : "#000",
-              cursor: running || !providerSecretPresent ? "not-allowed" : "pointer",
+              background: running || !providerSecretPresent || !preflightComplete ? "#222" : "#fff",
+              color: running || !providerSecretPresent || !preflightComplete ? "#888" : "#000",
+              cursor: running || !providerSecretPresent || !preflightComplete ? "not-allowed" : "pointer",
               fontWeight: 600,
             }}
           >
