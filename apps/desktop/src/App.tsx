@@ -55,6 +55,18 @@ type RunHistoryEntry = {
   buildApk?: boolean;
 };
 
+type CurrentRunState = {
+  runId?: string;
+  project?: string;
+  status?: string;
+  exitCode?: number;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  buildApk?: boolean;
+  phase?: string;
+};
+
 function loadSession(): SessionState | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -123,6 +135,21 @@ function formatTs(ts?: string): string {
   }
 }
 
+function parseJsonSafe<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isRunPossiblyActive(run: CurrentRunState | null): boolean {
+  if (!run) return false;
+  if (run.status === "running") return true;
+  if (!run.finishedAt) return true;
+  return false;
+}
+
 export default function App() {
   const initialSession = loadSession();
 
@@ -159,6 +186,9 @@ export default function App() {
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [runHistoryBusy, setRunHistoryBusy] = useState(false);
 
+  const [currentRun, setCurrentRun] = useState<CurrentRunState | null>(null);
+  const [currentRunBusy, setCurrentRunBusy] = useState(false);
+
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   const requiredSecretName =
@@ -166,6 +196,18 @@ export default function App() {
 
   const providerSecretPresent = secretNames.includes(requiredSecretName);
   const preflightComplete = isPreflightComplete(preflightConfig);
+  const runPossiblyActive = isRunPossiblyActive(currentRun);
+  const runLocked =
+    !!currentRun &&
+    (
+      currentRun.status === "running" ||
+      (
+        !currentRun.finishedAt &&
+        currentRun.status !== "success" &&
+        currentRun.status !== "error" &&
+        currentRun.status !== "paused"
+      )
+    );
 
   async function refreshSecrets() {
     try {
@@ -243,6 +285,19 @@ export default function App() {
     }
   }
 
+  async function refreshCurrentRun() {
+    try {
+      setCurrentRunBusy(true);
+      const raw = await invoke<string>("read_run_json_project", { project });
+      const parsed = parseJsonSafe<CurrentRunState>(String(raw));
+      setCurrentRun(parsed);
+    } catch {
+      setCurrentRun(null);
+    } finally {
+      setCurrentRunBusy(false);
+    }
+  }
+
   async function onSavePreflight() {
     if (preflightSaveBusy) return;
 
@@ -311,6 +366,7 @@ export default function App() {
   useEffect(() => {
     refreshPreflight();
     refreshRunHistory();
+    refreshCurrentRun();
   }, [project]);
 
   useEffect(() => {
@@ -356,6 +412,7 @@ export default function App() {
 
         setRunning(false);
         await refreshRunHistory();
+        await refreshCurrentRun();
       }),
       listen<string>("phase:update", (event) => {
         const next = String(event.payload) as Phase;
@@ -405,6 +462,13 @@ export default function App() {
   }
 
   async function onRun() {
+    if (runLocked) {
+      setLogs((prev) => [...prev, "[ui] run blocked: another run is still active or unrecovered"]);
+      setPhase("error");
+      await refreshCurrentRun();
+      return;
+    }
+
     if (!providerSecretPresent) {
       setLogs((prev) => [...prev, `[ui] missing required secret: ${requiredSecretName}`]);
       setPhase("error");
@@ -424,7 +488,7 @@ export default function App() {
   }
 
   async function onApproveContinue() {
-    if (running) return;
+    if (running || runLocked) return;
     setPausedAt("");
     await startRun("full", "none");
   }
@@ -794,6 +858,82 @@ export default function App() {
           </div>
         </div>
 
+        {runLocked && (
+          <div
+            style={{
+              display: "grid",
+              gap: 6,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #ff6b6b",
+              background: "#1a1010",
+              color: "#ffb3b3",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700 }}>
+              Run Lock aktiv
+            </div>
+            <div style={{ fontSize: 12 }}>
+              Es existiert noch ein aktiver oder nicht sauber wiederhergestellter Run.
+              Bevor du neu startest, muss dieser Zustand erst bereinigt werden.
+            </div>
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: 12,
+            borderRadius: 12,
+            border: runPossiblyActive ? "1px solid #ffb86b" : "1px solid #333",
+            background: "#111",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>
+            Current Run State
+          </div>
+
+          {currentRunBusy ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>Loading current run...</div>
+          ) : !currentRun ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>No current run state</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: runPossiblyActive ? "#ffb86b" : "#9ee37d" }}>
+                {runPossiblyActive
+                  ? "Run läuft noch oder wurde nicht sauber beendet"
+                  : "Letzter Run ist abgeschlossen"}
+              </div>
+
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                status: {currentRun.status ?? "unknown"} · runId: {currentRun.runId ?? "-"}
+              </div>
+
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                start: {formatTs(currentRun.startedAt)} · end: {formatTs(currentRun.finishedAt)}
+              </div>
+            </>
+          )}
+
+          <button
+            onClick={refreshCurrentRun}
+            disabled={currentRunBusy}
+            style={{
+              width: "fit-content",
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: currentRunBusy ? "#222" : "#1a1a1a",
+              color: currentRunBusy ? "#888" : "#fff",
+              cursor: currentRunBusy ? "not-allowed" : "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Refresh Current Run
+          </button>
+        </div>
+
         <div
           style={{
             display: "grid",
@@ -922,14 +1062,14 @@ export default function App() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={onRun}
-            disabled={running || !providerSecretPresent || !preflightComplete}
+            disabled={running || runLocked || !providerSecretPresent || !preflightComplete}
             style={{
               padding: "10px 14px",
               borderRadius: 10,
               border: "1px solid #333",
-              background: running || !providerSecretPresent || !preflightComplete ? "#222" : "#fff",
-              color: running || !providerSecretPresent || !preflightComplete ? "#888" : "#000",
-              cursor: running || !providerSecretPresent || !preflightComplete ? "not-allowed" : "pointer",
+              background: running || runLocked || !providerSecretPresent || !preflightComplete ? "#222" : "#fff",
+              color: running || runLocked || !providerSecretPresent || !preflightComplete ? "#888" : "#000",
+              cursor: running || runLocked || !providerSecretPresent || !preflightComplete ? "not-allowed" : "pointer",
               fontWeight: 600,
             }}
           >
@@ -939,14 +1079,14 @@ export default function App() {
           {phase === "paused" && (
             <button
               onClick={onApproveContinue}
-              disabled={running}
+              disabled={running || runLocked}
               style={{
                 padding: "10px 14px",
                 borderRadius: 10,
                 border: "1px solid #333",
-                background: "#9ee37d",
-                color: "#000",
-                cursor: running ? "not-allowed" : "pointer",
+                background: running || runLocked ? "#3a4a33" : "#9ee37d",
+                color: running || runLocked ? "#9aa58f" : "#000",
+                cursor: running || runLocked ? "not-allowed" : "pointer",
                 fontWeight: 700,
               }}
             >

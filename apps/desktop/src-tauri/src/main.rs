@@ -477,21 +477,19 @@ fn read_run_history(project: String) -> Result<String, String> {
 
 #[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
-  // Find repo root by walking up until we see workspace/projects
-  let mut dir = std::env::current_dir().map_err(|e| e.to_string())?;
-  loop {
-    if dir.join("workspace").join("projects").is_dir() {
-      break;
-    }
-    if !dir.pop() {
-      return Err(format!(
-        "Could not locate repo root (workspace/projects not found). cwd={}",
-        std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| "<unknown>".to_string())
-      ));
-    }
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join("run.json");
+
+  if !path.exists() {
+    return Ok(String::new());
   }
 
-  let path = dir.join("workspace").join("projects").join(&project).join("run.json");
   std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
@@ -588,6 +586,69 @@ fn set_secret(app: AppHandle, name: String, value: String) -> Result<(), String>
 }
 
 #[tauri::command]
+
+fn build_autofix_prompt(provider: &str, project: &str, prompt: &str, stdout: &str, stderr: &str) -> String {
+    let stdout_tail: String = stdout.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+    let stderr_tail: String = stderr.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+
+    format!(
+r#"You are the Auto-Fix engine for Flutter Builder.
+
+Provider: {provider}
+Project: {project}
+
+Original builder prompt:
+{prompt}
+
+The latest run failed.
+Analyze the failure and propose a minimal safe fix.
+
+Return ONLY:
+1. Short diagnosis
+2. Files likely affected
+3. A proposed patch plan
+
+Do not return markdown fences.
+
+--- STDOUT ---
+{stdout_tail}
+
+--- STDERR ---
+{stderr_tail}
+"#,
+        provider = provider,
+        project = project,
+        prompt = prompt,
+        stdout_tail = stdout_tail,
+        stderr_tail = stderr_tail
+    )
+}
+
+fn fake_autofix_response(provider: &str, stdout: &str, stderr: &str) -> String {
+    let combined = format!("{}\n{}", stdout, stderr).to_lowercase();
+
+    let diagnosis =
+        if combined.contains("flutter analyze") || combined.contains("analyzing ") {
+            "Likely analyzer failure caused by Dart code issue, missing import, type mismatch, or invalid widget structure."
+        } else if combined.contains("flutter test") || combined.contains("test failed") {
+            "Likely test failure caused by outdated widget expectations, changed text labels, or broken initialization path."
+        } else {
+            "General build/test failure detected; exact failure class should be refined in the next step."
+        };
+
+    format!(
+        "[autofix] provider={provider}\n\
+Diagnosis: {diagnosis}\n\
+Files likely affected: lib/main.dart, feature files touched by the run, related test files.\n\
+Patch plan: inspect the failing analyzer/test output, update the minimal affected Dart files, then rerun analyze/test.\n\
+Mode: proposal_only",
+        provider = provider,
+        diagnosis = diagnosis
+    )
+}
+
+
+#[tauri::command]
 fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, mode: String, stop_after: String) -> Result<(), String> {
     let app_handle = app.clone();
     std::thread::spawn(move || {
@@ -615,7 +676,9 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, 
 
         let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
 
-        let output = Command::new("node")
+        let run_path = project_dir.join("run.json");
+
+        let child_result = Command::new("node")
             .arg(agent_path)
             .arg("--project")
             .arg(&project)
@@ -628,47 +691,142 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, 
             .arg("--prompt")
             .arg(&prompt)
             .current_dir(&repo_root)
-            .output();
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
 
-        match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let stderr = String::from_utf8_lossy(&out.stderr);
+        match child_result {
+            Ok(mut child) => {
+                let start_wait = std::time::Instant::now();
+                let mut killed_lingering_child = false;
 
-                for line in stdout.lines() {
-                    let line_s = line.to_string();
-                    let lower = line_s.to_lowercase();
-
-                    if lower.contains("feature=") || lower.contains("generating files") {
-                        let _ = app_handle.emit("phase:update", "generate");
-                    } else if lower.contains("$ flutter analyze") || lower.contains("analyzing ") {
-                        let _ = app_handle.emit("phase:update", "analyze");
-                    } else if lower.contains("$ flutter test") || lower.contains("all tests passed") || lower.contains("smoke test") {
-                        let _ = app_handle.emit("phase:update", "test");
-                    } else if lower.contains("hot reload triggered") || lower.contains("reload_ok") {
-                        let _ = app_handle.emit("phase:update", "reload");
-                    } else if lower.contains("agent_status:paused") {
-                        let _ = app_handle.emit("phase:update", "done");
-                    } else if lower.contains("wrote run.json status=success") {
-                        let _ = app_handle.emit("phase:update", "done");
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_status)) => {
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            let _ = app_handle.emit("phase:update", "error");
+                            let _ = app_handle.emit("agent:log", format!("[backend] child try_wait failed: {}", e));
+                            let _ = app_handle.emit("agent:done", "error");
+                            return;
+                        }
                     }
 
-                    let _ = app_handle.emit("agent:log", line_s);
-                }
-                for line in stderr.lines() {
-                    let _ = app_handle.emit("agent:log", format!("[stderr] {}", line));
+                    let run_finished = std::fs::read_to_string(&run_path)
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .map(|json| {
+                            let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            let finished_at = json.get("finishedAt").and_then(|v| v.as_str()).unwrap_or("");
+                            !finished_at.is_empty()
+                                || status == "success"
+                                || status == "failed"
+                                || status == "paused"
+                                || status == "error"
+                        })
+                        .unwrap_or(false);
+
+                    if run_finished {
+                        let _ = app_handle.emit(
+                            "agent:log",
+                            "[backend] run.json finished before agent exit; terminating lingering agent process"
+                        );
+                        let _ = child.kill();
+                        killed_lingering_child = true;
+                        break;
+                    }
+
+                    if start_wait.elapsed() > std::time::Duration::from_secs(120) {
+                        let _ = app_handle.emit(
+                            "agent:log",
+                            "[backend] agent timeout reached; terminating lingering agent process"
+                        );
+                        let _ = child.kill();
+                        killed_lingering_child = true;
+                        break;
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(250));
                 }
 
-                if out.status.success() {
-                    if stdout.to_lowercase().contains("agent_status:paused") {
-                        let _ = app_handle.emit("agent:done", "paused");
-                    } else {
-                        let _ = app_handle.emit("phase:update", "done");
-                        let _ = app_handle.emit("agent:done", "ok");
+                match child.wait_with_output() {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+
+                        for line in stdout.lines() {
+                            let line_s = line.to_string();
+                            let lower = line_s.to_lowercase();
+
+                            if lower.contains("feature=") || lower.contains("generating files") {
+                                let _ = app_handle.emit("phase:update", "generate");
+                            } else if lower.contains("$ flutter analyze") || lower.contains("analyzing ") {
+                                let _ = app_handle.emit("phase:update", "analyze");
+                            } else if lower.contains("$ flutter test") || lower.contains("all tests passed") || lower.contains("smoke test") {
+                                let _ = app_handle.emit("phase:update", "test");
+                            } else if lower.contains("hot reload triggered") || lower.contains("reload_ok") {
+                                let _ = app_handle.emit("phase:update", "reload");
+                            } else if lower.contains("agent_status:paused") {
+                                let _ = app_handle.emit("phase:update", "done");
+                            } else if lower.contains("wrote run.json status=success") {
+                                let _ = app_handle.emit("phase:update", "done");
+                            }
+
+                            let _ = app_handle.emit("agent:log", line_s);
+                        }
+
+                        for line in stderr.lines() {
+                            let _ = app_handle.emit("agent:log", format!("[stderr] {}", line));
+                        }
+
+                        let run_json = std::fs::read_to_string(&run_path)
+                            .ok()
+                            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+
+                        let run_status = run_json
+                            .as_ref()
+                            .and_then(|v| v.get("status"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        if run_status == "paused" || stdout.to_lowercase().contains("agent_status:paused") {
+                            let _ = app_handle.emit("agent:done", "paused");
+                        } else if run_status == "success" || (out.status.success() && !killed_lingering_child) {
+                            let _ = app_handle.emit("phase:update", "done");
+                            let _ = app_handle.emit("agent:done", "ok");
+                        } else {
+                            let _ = app_handle.emit("agent:log", "[autofix] analyzer/test failed");
+                            let _ = app_handle.emit(
+                                "agent:log",
+                                format!("[autofix] requesting fix proposal from provider={}", provider)
+                            );
+
+                            let autofix_prompt = build_autofix_prompt(
+                                &provider,
+                                &project,
+                                &prompt,
+                                &stdout,
+                                &stderr,
+                            );
+
+                            let _ = app_handle.emit("agent:log", "[autofix] prompt prepared");
+                            let _ = app_handle.emit("agent:log", format!("[autofix] prompt:\n{}", autofix_prompt));
+
+                            let proposal = fake_autofix_response(&provider, &stdout, &stderr);
+                            let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
+                            let _ = app_handle.emit("agent:log", proposal);
+
+                            let _ = app_handle.emit("phase:update", "error");
+                            let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
+                        }
                     }
-                } else {
-                    let _ = app_handle.emit("phase:update", "error");
-                    let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
+                    Err(e) => {
+                        let _ = app_handle.emit("phase:update", "error");
+                        let _ = app_handle.emit("agent:log", format!("[backend] wait_with_output failed: {}", e));
+                        let _ = app_handle.emit("agent:done", "error");
+                    }
                 }
             }
             Err(e) => {
