@@ -38,6 +38,7 @@ type IntegrationsConfig = {
 };
 
 type PreflightConfig = {
+  schemaVersion?: number;
   completed?: boolean;
   monetization?: string;
   integrations?: IntegrationsConfig;
@@ -539,7 +540,8 @@ export default function App() {
           </div>
 
           <div style={{ fontSize: 12, color: "#aaa" }}>
-            monetization: {preflightConfig?.monetization ?? "unset"} · completed:{" "}
+            schemaVersion: {preflightConfig?.schemaVersion ?? "unset"} · monetization:{" "}
+            {preflightConfig?.monetization ?? "unset"} · completed:{" "}
             {preflightConfig?.completed ? "true" : "false"}
           </div>
 
