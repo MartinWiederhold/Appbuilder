@@ -9,12 +9,57 @@ type Provider = "openai" | "anthropic";
 type RunMode = "full" | "step";
 type StopAfter = "none" | "registration" | "onboarding" | "core" | "design" | "finalize";
 
+const SESSION_KEY = "flutter_builder_session_v1";
+
+type SessionState = {
+  project: string;
+  provider: Provider;
+  mode: RunMode;
+  stopAfter: StopAfter;
+  prompt: string;
+};
+
+function loadSession(): SessionState | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+
+    return {
+      project: typeof data.project === "string" ? data.project : "todo_flutter",
+      provider: data.provider === "anthropic" ? "anthropic" : "openai",
+      mode: data.mode === "step" ? "step" : "full",
+      stopAfter:
+        data.stopAfter === "registration" ||
+        data.stopAfter === "onboarding" ||
+        data.stopAfter === "core" ||
+        data.stopAfter === "design" ||
+        data.stopAfter === "finalize"
+          ? data.stopAfter
+          : "none",
+      prompt: typeof data.prompt === "string" ? data.prompt : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(state: SessionState) {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(state));
+  } catch {}
+}
+
 export default function App() {
-  const [project, setProject] = useState("todo_flutter");
-  const [provider, setProvider] = useState<Provider>("openai");
-  const [mode, setMode] = useState<RunMode>("full");
-  const [stopAfter, setStopAfter] = useState<StopAfter>("none");
-  const [prompt, setPrompt] = useState("");
+  const initialSession = loadSession();
+
+  const [project, setProject] = useState(initialSession?.project ?? "todo_flutter");
+  const [provider, setProvider] = useState<Provider>(initialSession?.provider ?? "openai");
+  const [mode, setMode] = useState<RunMode>(initialSession?.mode ?? "full");
+  const [stopAfter, setStopAfter] = useState<StopAfter>(initialSession?.stopAfter ?? "none");
+  const [prompt, setPrompt] = useState(
+    initialSession?.prompt ?? "feature: todo_v1\ntitle: Todo Pro\nhome_title: Todo Home"
+  );
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -65,6 +110,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    saveSession({
+      project,
+      provider,
+      mode,
+      stopAfter,
+      prompt,
+    });
+  }, [project, provider, mode, stopAfter, prompt]);
+
+  useEffect(() => {
     const unlistenPromises = [
       listen<AgentLogPayload>("agent:log", (event) => {
         const line = String(event.payload);
@@ -112,6 +167,12 @@ export default function App() {
       });
     };
   }, [stopAfter]);
+
+  useEffect(() => {
+    if (mode === "full" && stopAfter !== "none") {
+      setStopAfter("none");
+    }
+  }, [mode, stopAfter]);
 
   async function startRun(runMode: RunMode, runStopAfter: StopAfter) {
     if (running) return;
