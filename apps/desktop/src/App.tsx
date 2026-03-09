@@ -8,6 +8,7 @@ type Phase = "idle" | "generate" | "analyze" | "test" | "reload" | "done" | "pau
 type Provider = "openai" | "anthropic";
 type RunMode = "full" | "step";
 type StopAfter = "none" | "registration" | "onboarding" | "core" | "design" | "finalize";
+type Monetization = "unset" | "free" | "paid";
 
 const SESSION_KEY = "flutter_builder_session_v1";
 
@@ -89,6 +90,9 @@ export default function App() {
 
   const [preflightConfig, setPreflightConfig] = useState<PreflightConfig | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
+  const [preflightSaveBusy, setPreflightSaveBusy] = useState(false);
+  const [monetizationInput, setMonetizationInput] = useState<Monetization>("unset");
+  const [completedInput, setCompletedInput] = useState(false);
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
@@ -111,12 +115,58 @@ export default function App() {
     try {
       setPreflightBusy(true);
       const cfg = await invoke<PreflightConfig>("get_preflight_config", { project });
-      setPreflightConfig(cfg ?? null);
+      const nextCfg = cfg ?? null;
+      setPreflightConfig(nextCfg);
+      setMonetizationInput(
+        nextCfg?.monetization === "free" || nextCfg?.monetization === "paid"
+          ? (nextCfg.monetization as Monetization)
+          : "unset"
+      );
+      setCompletedInput(nextCfg?.completed === true);
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] get_preflight_config failed: ${String(e)}`]);
       setPreflightConfig(null);
+      setMonetizationInput("unset");
+      setCompletedInput(false);
     } finally {
       setPreflightBusy(false);
+    }
+  }
+
+  async function onSavePreflight() {
+    if (preflightSaveBusy) return;
+
+    try {
+      setPreflightSaveBusy(true);
+
+      const existingIntegrations =
+        preflightConfig?.integrations &&
+        typeof preflightConfig.integrations === "object" &&
+        !Array.isArray(preflightConfig.integrations)
+          ? preflightConfig.integrations
+          : {};
+
+      const nextConfig: PreflightConfig = {
+        completed: completedInput,
+        monetization: monetizationInput === "unset" ? "unset" : monetizationInput,
+        integrations: existingIntegrations,
+      };
+
+      await invoke("set_preflight_config", {
+        project,
+        config: nextConfig,
+      });
+
+      setLogs((prev) => [
+        ...prev,
+        `[ui] saved preflight completed=${String(completedInput)} monetization=${monetizationInput}`,
+      ]);
+
+      await refreshPreflight();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] set_preflight_config failed: ${String(e)}`]);
+    } finally {
+      setPreflightSaveBusy(false);
     }
   }
 
@@ -431,22 +481,80 @@ export default function App() {
             {preflightConfig?.completed ? "true" : "false"}
           </div>
 
-          <button
-            onClick={refreshPreflight}
-            disabled={preflightBusy}
-            style={{
-              width: "fit-content",
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #333",
-              background: preflightBusy ? "#222" : "#1a1a1a",
-              color: preflightBusy ? "#888" : "#fff",
-              cursor: preflightBusy ? "not-allowed" : "pointer",
-              fontWeight: 600,
-            }}
-          >
-            Refresh Preflight
-          </button>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <select
+              value={monetizationInput}
+              onChange={(e) => setMonetizationInput(e.target.value as Monetization)}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#0d0d0d",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            >
+              <option value="unset">unset</option>
+              <option value="free">free</option>
+              <option value="paid">paid</option>
+            </select>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 8px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#0d0d0d",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={completedInput}
+                onChange={(e) => setCompletedInput(e.target.checked)}
+              />
+              completed
+            </label>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={onSavePreflight}
+              disabled={preflightSaveBusy}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: preflightSaveBusy ? "#222" : "#fff",
+                color: preflightSaveBusy ? "#888" : "#000",
+                cursor: preflightSaveBusy ? "not-allowed" : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Save Preflight
+            </button>
+
+            <button
+              onClick={refreshPreflight}
+              disabled={preflightBusy}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: preflightBusy ? "#222" : "#1a1a1a",
+                color: preflightBusy ? "#888" : "#fff",
+                cursor: preflightBusy ? "not-allowed" : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Refresh Preflight
+            </button>
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
