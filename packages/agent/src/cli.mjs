@@ -228,6 +228,14 @@ function runCapture(cmd, args, cwd) {
 }
 
 // ---------- run.json ----------
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function newRunId(projectName) {
+  return `${projectName}-${Date.now()}`;
+}
+
 function writeRunJson(payload) {
   fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
 
@@ -546,7 +554,8 @@ void main() {
 // ---------- main ----------
 async function main() {
   const prompt = promptRaw;
-  const startedAt = new Date().toISOString();
+  const runId = newRunId(project);
+  const startedAt = nowIso();
   const steps = [];
   let finalExit = 0;
 
@@ -713,8 +722,13 @@ try {
         log("[agent] pause gate reached: registration");
         console.log("AGENT_STATUS:PAUSED");
         await writeRunJson({
+          runId,
+          project,
           status: "paused",
           exitCode: 0,
+          startedAt,
+          updatedAt: nowIso(),
+          buildApk: doBuildApk,
           steps,
           meta: {
             mode,
@@ -759,10 +773,12 @@ try {
     const finishedAt = new Date().toISOString();
     const status = finalExit === 0 ? "success" : "failed";
     writeRunJson({
+      runId,
       project,
       status,
       exitCode: finalExit,
       startedAt,
+      updatedAt: finishedAt,
       finishedAt,
       buildApk: doBuildApk,
       steps
@@ -795,12 +811,14 @@ execSync(`bash "${repoRoot}/scripts/run_live_flutter.sh" "${project}"`, { stdio:
 process.on("SIGINT", () => {
   err("[agent] interrupted (SIGINT)");
   try {
-    const now = new Date().toISOString();
+    const now = nowIso();
     writeRunJson({
+      runId: newRunId(project),
       project,
       status: "failed",
       exitCode: 130,
       startedAt: now,
+      updatedAt: now,
       finishedAt: now,
       buildApk: doBuildApk,
       steps: [{ name: "sigint", exitCode: 130 }]

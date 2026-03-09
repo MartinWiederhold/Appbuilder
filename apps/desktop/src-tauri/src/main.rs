@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Default)]
 struct RunConfig {
@@ -285,6 +286,17 @@ fn inject_flutter_dotenv(app: &tauri::AppHandle, project_dir: &std::path::Path) 
 
 
 
+fn now_ts() -> i64 {
+  SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|d| d.as_secs() as i64)
+    .unwrap_or(0)
+}
+
+fn new_run_id(project: &str) -> String {
+  format!("{}-{}", project, now_ts())
+}
+
 #[derive(Clone)]
 struct StepResult {
   name: String,
@@ -294,6 +306,8 @@ struct StepResult {
 }
 fn write_run_json(
   run_path: &std::path::Path,
+  run_id: &str,
+  started_at: i64,
   project: &str,
   build_apk: bool,
   status: &str,
@@ -317,6 +331,9 @@ fn write_run_json(
   let exit_code = if status == "running" || status == "success" { 0 } else { 1 };
 
   let payload = json!({
+    "runId": run_id,
+    "startedAt": started_at,
+    "updatedAt": now_ts(),
     "project": project,
     "status": status,
     "exitCode": exit_code,
@@ -666,6 +683,8 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   inject_flutter_dotenv(&app, &project_dir);
 
   let run_path = project_dir.join("run.json");
+  let run_id = new_run_id(&project);
+  let started_at = now_ts();
 
 
   // Preflight (MVP): require config before running phases
@@ -679,7 +698,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
       error: Some(msg.to_string()),
       output_tail: msg.to_string(),
     });
-    write_run_json(&run_path, &project, build_apk, "failed", "preflight", &steps0, 0, msg)?;
+    write_run_json(&run_path, &run_id, started_at, &project, build_apk, "failed", "preflight", &steps0, 0, msg)?;
     let _ = app.emit("agent:log", format!("[preflight] {}", msg));
     let _ = app.emit("agent:done", "needs_preflight");
     return Ok(());
@@ -693,7 +712,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   // Phase: feature_generate (placeholder)
   let _ = app.emit("agent:log", "[phase:feature_generate] (placeholder) generating feature...");
   steps.push(StepResult { name: "feature_generate".to_string(), exit_code: 0, error: None, output_tail: "".to_string() });
-  write_run_json(&run_path, &project, build_apk, "running", "feature_generate", &steps, repair_attempts, &last_error)?;
+  write_run_json(&run_path, &run_id, started_at, &project, build_apk, "running", "feature_generate", &steps, repair_attempts, &last_error)?;
 
   // Helper closure to run a phase with auto-repair retries
   let mut run_phase = |phase_name: &str, cmd: &str, args: &[&str]| -> Result<bool, String> {
@@ -701,7 +720,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
     for attempt in 0..3 {
       let st = run_step(&app, &project_dir, phase_name, cmd, args);
       steps.push(st.clone());
-      write_run_json(&run_path, &project, build_apk, "running", phase_name, &steps, repair_attempts, &last_error)?;
+      write_run_json(&run_path, &run_id, started_at, &project, build_apk, "running", phase_name, &steps, repair_attempts, &last_error)?;
 
       if st.exit_code == 0 {
         return Ok(true);
@@ -717,7 +736,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
         for fx in fixes {
           steps.push(fx);
         }
-        write_run_json(&run_path, &project, build_apk, "running", "repair", &steps, repair_attempts, &last_error)?;
+        write_run_json(&run_path, &run_id, started_at, &project, build_apk, "running", "repair", &steps, repair_attempts, &last_error)?;
         continue;
       } else {
         // exhausted retries
@@ -729,21 +748,21 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
 
   // Phase: flutter_pub_get
   if !run_phase("flutter_pub_get", "flutter", &["pub", "get"])? {
-    write_run_json(&run_path, &project, build_apk, "failed", "flutter_pub_get", &steps, repair_attempts, &last_error)?;
+    write_run_json(&run_path, &run_id, started_at, &project, build_apk, "failed", "flutter_pub_get", &steps, repair_attempts, &last_error)?;
     let _ = app.emit("agent:done", "failed");
     return Ok(());
   }
 
   // Phase: flutter_analyze
   if !run_phase("flutter_analyze", "flutter", &["analyze"])? {
-    write_run_json(&run_path, &project, build_apk, "failed", "flutter_analyze", &steps, repair_attempts, &last_error)?;
+    write_run_json(&run_path, &run_id, started_at, &project, build_apk, "failed", "flutter_analyze", &steps, repair_attempts, &last_error)?;
     let _ = app.emit("agent:done", "failed");
     return Ok(());
   }
 
   // Phase: flutter_test
   if !run_phase("flutter_test", "flutter", &["test"])? {
-    write_run_json(&run_path, &project, build_apk, "failed", "flutter_test", &steps, repair_attempts, &last_error)?;
+    write_run_json(&run_path, &run_id, started_at, &project, build_apk, "failed", "flutter_test", &steps, repair_attempts, &last_error)?;
     let _ = app.emit("agent:done", "failed");
     return Ok(());
   }
@@ -751,13 +770,13 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
   // Optional: build apk
   if build_apk {
     if !run_phase("flutter_build_apk", "flutter", &["build", "apk"])? {
-      write_run_json(&run_path, &project, build_apk, "failed", "flutter_build_apk", &steps, repair_attempts, &last_error)?;
+      write_run_json(&run_path, &run_id, started_at, &project, build_apk, "failed", "flutter_build_apk", &steps, repair_attempts, &last_error)?;
       let _ = app.emit("agent:done", "failed");
       return Ok(());
     }
   }
 
-  write_run_json(&run_path, &project, build_apk, "success", "done", &steps, repair_attempts, &last_error)?;
+  write_run_json(&run_path, &run_id, started_at, &project, build_apk, "success", "done", &steps, repair_attempts, &last_error)?;
   let _ = app.emit("agent:log", format!("[backend] wrote run.json: {}", run_path.display()));
   let _ = app.emit("agent:done", "ok");
   Ok(())
