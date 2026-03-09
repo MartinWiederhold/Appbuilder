@@ -236,8 +236,26 @@ function newRunId(projectName) {
   return `${projectName}-${Date.now()}`;
 }
 
+function appendRunHistory(payload) {
+  const builderDir = path.join(projectDir, ".builder");
+  fs.mkdirSync(builderDir, { recursive: true });
+  const historyPath = path.join(builderDir, "runs.jsonl");
+  fs.appendFileSync(historyPath, JSON.stringify(payload) + "\n", "utf8");
+}
+
 function writeRunJson(payload) {
   fs.writeFileSync(path.join(projectDir, "run.json"), JSON.stringify(payload, null, 2), "utf8");
+
+  appendRunHistory({
+    runId: payload.runId ?? null,
+    project: payload.project ?? project,
+    status: payload.status ?? "unknown",
+    exitCode: payload.exitCode ?? 1,
+    startedAt: payload.startedAt ?? null,
+    updatedAt: payload.updatedAt ?? null,
+    finishedAt: payload.finishedAt ?? null,
+    buildApk: payload.buildApk ?? false
+  });
 
 
   // ---- BMAD 4.0.7: trigger flutter hot reload AFTER success ----
