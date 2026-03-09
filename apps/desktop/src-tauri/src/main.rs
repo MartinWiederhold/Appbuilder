@@ -51,6 +51,38 @@ fn write_preflight(project_dir: &std::path::Path, cfg: &Value) -> Result<(), Str
   Ok(())
 }
 
+fn normalize_preflight_config(cfg: &Value) -> Value {
+  let mut obj = cfg.as_object().cloned().unwrap_or_default();
+
+  if !obj.contains_key("schemaVersion") {
+    obj.insert("schemaVersion".to_string(), json!(1));
+  }
+
+  if !obj.contains_key("completed") {
+    obj.insert("completed".to_string(), json!(false));
+  }
+
+  match obj.get("monetization").and_then(|v| v.as_str()) {
+    Some("free") | Some("paid") | Some("unset") => {}
+    _ => {
+      obj.insert("monetization".to_string(), json!("unset"));
+    }
+  }
+
+  if !obj.get("integrations").map(|v| v.is_object()).unwrap_or(false) {
+    obj.insert("integrations".to_string(), json!({}));
+  }
+
+  Value::Object(obj)
+}
+
+fn read_preflight_normalized(project_dir: &std::path::Path) -> Value {
+  match read_preflight(project_dir) {
+    Some(v) => normalize_preflight_config(&v),
+    None => normalize_preflight_config(&json!({})),
+  }
+}
+
 fn preflight_is_complete(cfg: &Value) -> bool {
   let completed = cfg.get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
   let monetization_ok =
@@ -462,14 +494,17 @@ fn start_live_flutter(_app: AppHandle) -> Result<(), String> {
 fn get_preflight_config(project: String) -> Result<Value, String> {
   let repo_root = find_repo_root().ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
   let project_dir = repo_root.join("workspace").join("projects").join(&project);
-  Ok(read_preflight(&project_dir).unwrap_or_else(|| json!({ "completed": false })))
+  let cfg = read_preflight_normalized(&project_dir);
+  write_preflight(&project_dir, &cfg)?;
+  Ok(cfg)
 }
 
 #[tauri::command]
 fn set_preflight_config(project: String, config: Value) -> Result<(), String> {
   let repo_root = find_repo_root().ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
   let project_dir = repo_root.join("workspace").join("projects").join(&project);
-  write_preflight(&project_dir, &config)?;
+  let normalized = normalize_preflight_config(&config);
+  write_preflight(&project_dir, &normalized)?;
   Ok(())
 }
 
@@ -534,7 +569,7 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, 
         };
 
         let project_dir = repo_root.join("workspace").join("projects").join(&project);
-        let cfg = read_preflight(&project_dir).unwrap_or_else(|| json!({ "completed": false }));
+        let cfg = read_preflight_normalized(&project_dir);
 
         if !preflight_is_complete(&cfg) {
             let _ = app_handle.emit("agent:log", "[backend] preflight incomplete: run blocked");
@@ -634,7 +669,7 @@ fn run_agent_stream(app: AppHandle, project: String, prompt: String, build_apk: 
 
 
   // Preflight (MVP): require config before running phases
-  let cfg = read_preflight(&project_dir).unwrap_or_else(|| json!({ "completed": false }));
+  let cfg = read_preflight_normalized(&project_dir);
   if !preflight_is_complete(&cfg) {
     let msg = "Preflight required. Configure integrations first (Supabase/SendGrid + monetization) and set completed=true.";
     let mut steps0: Vec<StepResult> = vec![];
