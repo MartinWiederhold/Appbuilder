@@ -44,6 +44,17 @@ type PreflightConfig = {
   integrations?: IntegrationsConfig;
 };
 
+type RunHistoryEntry = {
+  runId?: string;
+  project?: string;
+  status?: string;
+  exitCode?: number;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  buildApk?: boolean;
+};
+
 function loadSession(): SessionState | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -103,6 +114,15 @@ function isPreflightComplete(cfg: PreflightConfig | null): boolean {
   return supabaseOk && sendgridOk;
 }
 
+function formatTs(ts?: string): string {
+  if (!ts) return "-";
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return ts;
+  }
+}
+
 export default function App() {
   const initialSession = loadSession();
 
@@ -135,6 +155,9 @@ export default function App() {
   const [sendgridEnabled, setSendgridEnabled] = useState(false);
   const [sendgridApiKey, setSendgridApiKey] = useState("");
   const [sendgridFromEmail, setSendgridFromEmail] = useState("");
+
+  const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
+  const [runHistoryBusy, setRunHistoryBusy] = useState(false);
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
@@ -189,6 +212,34 @@ export default function App() {
       setSendgridFromEmail("");
     } finally {
       setPreflightBusy(false);
+    }
+  }
+
+  async function refreshRunHistory() {
+    try {
+      setRunHistoryBusy(true);
+      const raw = await invoke<string>("read_run_history", { project });
+      const entries = String(raw)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as RunHistoryEntry;
+          } catch {
+            return null;
+          }
+        })
+        .filter((v): v is RunHistoryEntry => !!v)
+        .reverse()
+        .slice(0, 5);
+
+      setRunHistory(entries);
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] read_run_history failed: ${String(e)}`]);
+      setRunHistory([]);
+    } finally {
+      setRunHistoryBusy(false);
     }
   }
 
@@ -259,6 +310,7 @@ export default function App() {
 
   useEffect(() => {
     refreshPreflight();
+    refreshRunHistory();
   }, [project]);
 
   useEffect(() => {
@@ -288,7 +340,7 @@ export default function App() {
           refreshSecrets();
         }
       }),
-      listen<string>("agent:done", (event) => {
+      listen<string>("agent:done", async (event) => {
         const payload = String(event.payload);
         const msg = `\n[done] ${payload}`;
         setLogs((prev) => [...prev, msg]);
@@ -303,6 +355,7 @@ export default function App() {
         }
 
         setRunning(false);
+        await refreshRunHistory();
       }),
       listen<string>("phase:update", (event) => {
         const next = String(event.payload) as Phase;
@@ -318,7 +371,7 @@ export default function App() {
         } catch {}
       });
     };
-  }, [stopAfter]);
+  }, [stopAfter, project]);
 
   useEffect(() => {
     if (mode === "full" && stopAfter !== "none") {
@@ -739,6 +792,70 @@ export default function App() {
               Refresh Preflight
             </button>
           </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#111",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>
+            Recent Runs
+          </div>
+
+          {runHistoryBusy ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>Loading run history...</div>
+          ) : runHistory.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>No runs yet</div>
+          ) : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {runHistory.map((run, idx) => (
+                <div
+                  key={`${run.runId ?? "run"}-${idx}`}
+                  style={{
+                    display: "grid",
+                    gap: 4,
+                    padding: 10,
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: "#0d0d0d",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#fff" }}>
+                    {run.status ?? "unknown"} · {run.runId ?? "-"}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#aaa" }}>
+                    start: {formatTs(run.startedAt)}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#aaa" }}>
+                    end: {formatTs(run.finishedAt)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            onClick={refreshRunHistory}
+            disabled={runHistoryBusy}
+            style={{
+              width: "fit-content",
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: runHistoryBusy ? "#222" : "#1a1a1a",
+              color: runHistoryBusy ? "#888" : "#fff",
+              cursor: runHistoryBusy ? "not-allowed" : "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Refresh Run History
+          </button>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>

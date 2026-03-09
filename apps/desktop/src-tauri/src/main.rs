@@ -457,6 +457,24 @@ fn run_step(app: &tauri::AppHandle, cwd: &std::path::Path, name: &str, cmd: &str
 
 
 
+
+#[tauri::command]
+fn read_run_history(project: String) -> Result<String, String> {
+  let repo_root = find_repo_root().ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+  let path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join(".builder")
+    .join("runs.jsonl");
+
+  if !path.exists() {
+    return Ok(String::new());
+  }
+
+  std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
 #[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
   // Find repo root by walking up until we see workspace/projects
@@ -804,7 +822,8 @@ fn main() {
         read_run_json_project,
         get_preflight_config,
         set_preflight_config,
-        run_agent
+        run_agent,
+        read_run_history
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
