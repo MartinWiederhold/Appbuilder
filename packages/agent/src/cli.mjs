@@ -43,7 +43,11 @@ async function maybeHandleSecretsCli() {
       process.exit(1);
     }
     const v = await getSecret(name);
-    console.log(v ? `[secrets] found ${name}` : `[secrets] missing ${name}`);
+    if (!v) {
+      console.error(`[secrets] missing ${name}`);
+      process.exit(1);
+    }
+    process.stdout.write(String(v));
     return true;
   }
 

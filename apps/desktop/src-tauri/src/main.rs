@@ -585,6 +585,32 @@ fn set_secret(app: AppHandle, name: String, value: String) -> Result<(), String>
     }
 }
 
+
+fn get_secret_value(name: &str) -> Result<String, String> {
+    let repo_root = find_repo_root().ok_or_else(|| "repo root not found".to_string())?;
+    let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
+
+    let out = std::process::Command::new("node")
+        .arg(agent_path)
+        .arg("secrets:get")
+        .arg(name)
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !out.status.success() {
+        return Err(format!("failed to get secret {}", name));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Err(format!("secret {} is empty or missing", name));
+    }
+
+    Ok(stdout)
+}
+
+
 #[tauri::command]
 
 fn build_autofix_prompt(provider: &str, project: &str, prompt: &str, stdout: &str, stderr: &str) -> String {
@@ -623,6 +649,54 @@ Do not return markdown fences.
         stderr_tail = stderr_tail
     )
 }
+
+
+
+fn request_autofix_from_provider(
+    provider: &str,
+    prompt: &str,
+    api_key: &str,
+) -> Result<String, String> {
+
+    if provider != "openai" {
+        return Err(format!("Provider {} not supported yet in v1b", provider));
+    }
+
+    let client = reqwest::blocking::Client::new();
+
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [
+            { "role": "system", "content": "You are the Auto-Fix engine for Flutter Builder. Return only plain text. No markdown fences." },
+            { "role": "user", "content": prompt }
+        ],
+        "temperature": 0.2
+    });
+
+    let res = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .map_err(|e| format!("request failed: {}", e))?;
+
+    let json: serde_json::Value = res.json()
+        .map_err(|e| format!("invalid json: {}", e))?;
+
+    if let Some(content) = json
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_str())
+    {
+        return Ok(content.to_string());
+    }
+
+    Err(format!("invalid response structure: {}", json))
+}
+
+
 
 fn fake_autofix_response(provider: &str, stdout: &str, stderr: &str) -> String {
     let combined = format!("{}\n{}", stdout, stderr).to_lowercase();
@@ -814,7 +888,21 @@ fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, 
                             let _ = app_handle.emit("agent:log", "[autofix] prompt prepared");
                             let _ = app_handle.emit("agent:log", format!("[autofix] prompt:\n{}", autofix_prompt));
 
-                            let proposal = fake_autofix_response(&provider, &stdout, &stderr);
+                            
+let proposal = match get_secret_value("OPENAI_API_KEY") {
+    Ok(api_key) => {
+        match request_autofix_from_provider(
+            &provider,
+            &autofix_prompt,
+            &api_key,
+        ) {
+            Ok(p) => p,
+            Err(e) => format!("[autofix] provider request failed: {}", e),
+        }
+    }
+    Err(e) => format!("[autofix] provider request failed: {}", e),
+};
+
                             let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                             let _ = app_handle.emit("agent:log", proposal);
 
