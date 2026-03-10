@@ -616,6 +616,61 @@ fn get_secret_value(name: &str) -> Result<String, String> {
 
 
 
+
+fn write_autofix_result_artifact(
+    project_dir: &std::path::Path,
+    status: &str,
+    summary: &str,
+    touched_files: Vec<String>,
+) -> Result<std::path::PathBuf, String> {
+    let builder_dir = project_dir.join(".builder");
+    std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+    let artifact_path = builder_dir.join("autofix.result.json");
+    let payload = serde_json::json!({
+        "resultStatus": status,
+        "createdAt": now_ts(),
+        "summary": summary,
+        "touchedFiles": touched_files,
+        "retryRecommended": true
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+    Ok(artifact_path)
+}
+
+fn apply_known_autofix_mvp(
+    project_dir: &std::path::Path,
+    proposal: &str,
+) -> Result<std::path::PathBuf, String> {
+    let lower = proposal.to_lowercase();
+    let mut touched_files: Vec<String> = Vec::new();
+
+    if lower.contains("main.dart") {
+        touched_files.push("lib/main.dart".to_string());
+    }
+    if lower.contains("widget_test.dart") {
+        touched_files.push("test/widget_test.dart".to_string());
+    }
+    if lower.contains("home_screen.dart") {
+        touched_files.push("lib/home_screen.dart".to_string());
+    }
+    if touched_files.is_empty() {
+        touched_files.push("lib/main.dart".to_string());
+    }
+
+    let summary = "Known MVP autofix apply path executed. No generic code diff applied yet; files identified and retry prepared.";
+
+    write_autofix_result_artifact(
+        project_dir,
+        "applied_mvp_stub",
+        summary,
+        touched_files,
+    )
+}
+
+
 fn write_autofix_patch_artifact(
     project_dir: &std::path::Path,
     proposal: &str,
@@ -1048,6 +1103,20 @@ let proposal = match get_secret_value("OPENAI_API_KEY") {
                                     }
                                     Err(e) => {
                                         let _ = app_handle.emit("agent:log", format!("[autofix] patch artifact write failed: {}", e));
+                                    }
+                                }
+                            }
+
+                            if !proposal.starts_with("[autofix] provider request failed:") {
+                                match apply_known_autofix_mvp(
+                                    &project_dir,
+                                    &proposal,
+                                ) {
+                                    Ok(path) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] result artifact written: {}", path.display()));
+                                    }
+                                    Err(e) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] result artifact write failed: {}", e));
                                     }
                                 }
                             }
