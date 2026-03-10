@@ -613,6 +613,34 @@ fn get_secret_value(name: &str) -> Result<String, String> {
 
 #[tauri::command]
 
+
+fn write_autofix_artifact(
+    project_dir: &std::path::Path,
+    provider: &str,
+    original_prompt: &str,
+    autofix_prompt: &str,
+    proposal: &str,
+    status: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builder_dir = project_dir.join(".builder");
+    std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+    let artifact_path = builder_dir.join("autofix.json");
+    let payload = serde_json::json!({
+        "provider": provider,
+        "status": status,
+        "createdAt": now_ts(),
+        "originalPrompt": original_prompt,
+        "autofixPrompt": autofix_prompt,
+        "proposal": proposal
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+    Ok(artifact_path)
+}
+
+
 fn build_autofix_prompt(provider: &str, project: &str, prompt: &str, stdout: &str, stderr: &str) -> String {
     let stdout_tail: String = stdout.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
     let stderr_tail: String = stderr.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
@@ -903,7 +931,29 @@ let proposal = match get_secret_value("OPENAI_API_KEY") {
     Err(e) => format!("[autofix] provider request failed: {}", e),
 };
 
-                            let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
+                                                        let artifact_status = if proposal.starts_with("[autofix] provider request failed:") {
+                                "provider_error"
+                            } else {
+                                "proposal_ready"
+                            };
+
+                            match write_autofix_artifact(
+                                &project_dir,
+                                &provider,
+                                &prompt,
+                                &autofix_prompt,
+                                &proposal,
+                                artifact_status,
+                            ) {
+                                Ok(path) => {
+                                    let _ = app_handle.emit("agent:log", format!("[autofix] artifact written: {}", path.display()));
+                                }
+                                Err(e) => {
+                                    let _ = app_handle.emit("agent:log", format!("[autofix] artifact write failed: {}", e));
+                                }
+                            }
+
+let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                             let _ = app_handle.emit("agent:log", proposal);
 
                             let _ = app_handle.emit("phase:update", "error");
