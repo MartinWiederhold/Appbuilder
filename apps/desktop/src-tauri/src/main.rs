@@ -614,6 +614,29 @@ fn get_secret_value(name: &str) -> Result<String, String> {
 #[tauri::command]
 
 
+
+fn write_autofix_apply_artifact(
+    project_dir: &std::path::Path,
+    proposal: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builder_dir = project_dir.join(".builder");
+    std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+    let artifact_path = builder_dir.join("autofix.apply.json");
+    let payload = serde_json::json!({
+        "applyStatus": "ready_to_apply",
+        "createdAt": now_ts(),
+        "retryEligible": true,
+        "sourceArtifact": "autofix.json",
+        "proposal": proposal
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+    Ok(artifact_path)
+}
+
+
 fn write_autofix_artifact(
     project_dir: &std::path::Path,
     provider: &str,
@@ -950,6 +973,20 @@ let proposal = match get_secret_value("OPENAI_API_KEY") {
                                 }
                                 Err(e) => {
                                     let _ = app_handle.emit("agent:log", format!("[autofix] artifact write failed: {}", e));
+                                }
+                            }
+
+                            if !proposal.starts_with("[autofix] provider request failed:") {
+                                match write_autofix_apply_artifact(
+                                    &project_dir,
+                                    &proposal,
+                                ) {
+                                    Ok(path) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] apply artifact written: {}", path.display()));
+                                    }
+                                    Err(e) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] apply artifact write failed: {}", e));
+                                    }
                                 }
                             }
 
