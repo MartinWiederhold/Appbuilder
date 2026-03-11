@@ -619,6 +619,95 @@ fn get_secret_value(name: &str) -> Result<String, String> {
 
 
 
+
+fn sanitize_retry_prompt(prompt: &str) -> String {
+    prompt
+        .lines()
+        .filter(|line| {
+            let l = line.trim().to_lowercase();
+            l != "inject_error: true" && l != "force_invalid_widget: true"
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn run_node_agent_once(
+    repo_root: &std::path::Path,
+    project: &str,
+    provider: &str,
+    mode: &str,
+    stop_after: &str,
+    prompt: &str,
+) -> Result<(std::process::Output, bool), String> {
+    let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
+    let project_dir = repo_root.join("workspace").join("projects").join(project);
+    let run_path = project_dir.join("run.json");
+
+    let mut child = Command::new("node")
+        .arg(agent_path)
+        .arg("--project")
+        .arg(project)
+        .arg("--provider")
+        .arg(provider)
+        .arg("--mode")
+        .arg(mode)
+        .arg("--stop_after")
+        .arg(stop_after)
+        .arg("--prompt")
+        .arg(prompt)
+        .current_dir(repo_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn failed: {}", e))?;
+
+    let start_wait = std::time::Instant::now();
+    let mut killed_lingering_child = false;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(e) => return Err(format!("try_wait failed: {}", e)),
+        }
+
+        let run_finished = std::fs::read_to_string(&run_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .map(|json| {
+                let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let finished_at = json.get("finishedAt").and_then(|v| v.as_str()).unwrap_or("");
+                !finished_at.is_empty()
+                    || status == "success"
+                    || status == "failed"
+                    || status == "paused"
+                    || status == "error"
+            })
+            .unwrap_or(false);
+
+        if run_finished {
+            let _ = child.kill();
+            killed_lingering_child = true;
+            break;
+        }
+
+        if start_wait.elapsed() > std::time::Duration::from_secs(120) {
+            let _ = child.kill();
+            killed_lingering_child = true;
+            break;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("wait_with_output failed: {}", e))?;
+
+    Ok((out, killed_lingering_child))
+}
+
+
 fn write_autofix_retry_run_artifact(
     project_dir: &std::path::Path,
     project: &str,
@@ -1210,10 +1299,82 @@ let proposal = match get_secret_value("OPENAI_API_KEY") {
                             }
 
 let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
-                            let _ = app_handle.emit("agent:log", proposal);
+                            let _ = app_handle.emit("agent:log", &proposal);
 
-                            let _ = app_handle.emit("phase:update", "error");
-                            let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
+                            let retry_prompt = sanitize_retry_prompt(&prompt);
+                            let retry_needed = retry_prompt.trim() != prompt.trim()
+                                && !proposal.starts_with("[autofix] provider request failed:");
+
+                            if retry_needed {
+                                let _ = app_handle.emit("agent:log", "[autofix] retry starting with sanitized prompt");
+                                let _ = app_handle.emit("phase:update", "generate");
+
+                                match run_node_agent_once(
+                                    &repo_root,
+                                    &project,
+                                    &provider,
+                                    "full",
+                                    "none",
+                                    &retry_prompt,
+                                ) {
+                                    Ok((retry_out, retry_killed)) => {
+                                        let retry_stdout = String::from_utf8_lossy(&retry_out.stdout);
+                                        let retry_stderr = String::from_utf8_lossy(&retry_out.stderr);
+
+                                        for line in retry_stdout.lines() {
+                                            let line_s = format!("[retry] {}", line);
+                                            let lower = line.to_lowercase();
+
+                                            if lower.contains("feature=") || lower.contains("generating files") {
+                                                let _ = app_handle.emit("phase:update", "generate");
+                                            } else if lower.contains("$ flutter analyze") || lower.contains("analyzing ") {
+                                                let _ = app_handle.emit("phase:update", "analyze");
+                                            } else if lower.contains("$ flutter test") || lower.contains("all tests passed") || lower.contains("smoke test") {
+                                                let _ = app_handle.emit("phase:update", "test");
+                                            } else if lower.contains("hot reload triggered") || lower.contains("reload_ok") {
+                                                let _ = app_handle.emit("phase:update", "reload");
+                                            } else if lower.contains("wrote run.json status=success") {
+                                                let _ = app_handle.emit("phase:update", "done");
+                                            }
+
+                                            let _ = app_handle.emit("agent:log", line_s);
+                                        }
+
+                                        for line in retry_stderr.lines() {
+                                            let _ = app_handle.emit("agent:log", format!("[retry][stderr] {}", line));
+                                        }
+
+                                        let retry_run_path = repo_root.join("workspace").join("projects").join(&project).join("run.json");
+                                        let retry_run_json = std::fs::read_to_string(&retry_run_path)
+                                            .ok()
+                                            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+
+                                        let retry_run_status = retry_run_json
+                                            .as_ref()
+                                            .and_then(|v| v.get("status"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+
+                                        if retry_run_status == "success" || (retry_out.status.success() && !retry_killed) {
+                                            let _ = app_handle.emit("agent:log", "[autofix] retry succeeded");
+                                            let _ = app_handle.emit("phase:update", "done");
+                                            let _ = app_handle.emit("agent:done", "ok");
+                                        } else {
+                                            let _ = app_handle.emit("agent:log", "[autofix] retry failed");
+                                            let _ = app_handle.emit("phase:update", "error");
+                                            let _ = app_handle.emit("agent:done", format!("error ({})", retry_out.status));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] retry spawn failed: {}", e));
+                                        let _ = app_handle.emit("phase:update", "error");
+                                        let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
+                                    }
+                                }
+                            } else {
+                                let _ = app_handle.emit("phase:update", "error");
+                                let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
+                            }
                         }
                     }
                     Err(e) => {
