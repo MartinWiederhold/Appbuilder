@@ -476,6 +476,22 @@ fn read_run_history(project: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_file_if_exists(project: String, relativePath: String) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  let path = project_dir.join(&relativePath);
+
+  if !path.exists() {
+    return Ok(String::new());
+  }
+
+  std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+
+#[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
@@ -1830,6 +1846,7 @@ fn main() {
         set_secret,
         start_live_flutter,
         reveal_project,
+        read_file_if_exists,
         read_run_json_project,
         get_preflight_config,
         set_preflight_config,

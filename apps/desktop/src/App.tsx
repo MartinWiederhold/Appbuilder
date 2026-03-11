@@ -55,6 +55,33 @@ type RunHistoryEntry = {
   buildApk?: boolean;
 };
 
+
+type AutofixSelfHealState = {
+  selfHealStatus?: string;
+  createdAt?: string | number;
+  failureStep?: string;
+  removedFlags?: string[];
+  originalPrompt?: string;
+  sanitizedPrompt?: string;
+  reason?: string;
+};
+
+type AutofixRetryRunState = {
+  retryRunStatus?: string;
+  finalRunStatus?: string;
+  failureStep?: string | null;
+  failureExitCode?: number;
+  analyzeFailed?: boolean;
+  testFailed?: boolean;
+  notes?: string;
+  removedFlags?: string[];
+  runId?: string | null;
+  startedAt?: string | number | null;
+  updatedAt?: string | number | null;
+  finishedAt?: string | number | null;
+  finishedAtSource?: string | number | null;
+};
+
 type CurrentRunState = {
   runId?: string;
   project?: string;
@@ -188,6 +215,9 @@ export default function App() {
 
   const [currentRun, setCurrentRun] = useState<CurrentRunState | null>(null);
   const [currentRunBusy, setCurrentRunBusy] = useState(false);
+  const [autofixSelfHeal, setAutofixSelfHeal] = useState<AutofixSelfHealState | null>(null);
+  const [autofixRetryRun, setAutofixRetryRun] = useState<AutofixRetryRunState | null>(null);
+  const [autofixBusy, setAutofixBusy] = useState(false);
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
@@ -298,6 +328,30 @@ export default function App() {
     }
   }
 
+  async function refreshAutofixState() {
+    try {
+      setAutofixBusy(true);
+
+      const selfHealRaw = await invoke<string>("read_file_if_exists", {
+        project,
+        relativePath: ".builder/autofix.selfheal.json",
+      }).catch(() => "");
+
+      const retryRunRaw = await invoke<string>("read_file_if_exists", {
+        project,
+        relativePath: ".builder/autofix.retry.run.json",
+      }).catch(() => "");
+
+      setAutofixSelfHeal(selfHealRaw ? parseJsonSafe<AutofixSelfHealState>(String(selfHealRaw)) : null);
+      setAutofixRetryRun(retryRunRaw ? parseJsonSafe<AutofixRetryRunState>(String(retryRunRaw)) : null);
+    } catch {
+      setAutofixSelfHeal(null);
+      setAutofixRetryRun(null);
+    } finally {
+      setAutofixBusy(false);
+    }
+  }
+
   async function onSavePreflight() {
     if (preflightSaveBusy) return;
 
@@ -367,6 +421,7 @@ export default function App() {
     refreshPreflight();
     refreshRunHistory();
     refreshCurrentRun();
+    refreshAutofixState();
   }, [project]);
 
   useEffect(() => {
@@ -413,6 +468,7 @@ export default function App() {
         setRunning(false);
         await refreshRunHistory();
         await refreshCurrentRun();
+        await refreshAutofixState();
       }),
       listen<string>("phase:update", (event) => {
         const next = String(event.payload) as Phase;
@@ -879,6 +935,65 @@ export default function App() {
             </div>
           </div>
         )}
+
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#111",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>
+            Auto-Fix Summary
+          </div>
+
+          {autofixBusy ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>Loading autofix summary...</div>
+          ) : !autofixSelfHeal && !autofixRetryRun ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>No autofix data yet</div>
+          ) : (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "#fff" }}>
+                self-heal: {autofixSelfHeal?.selfHealStatus ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#fff" }}>
+                retry: {autofixRetryRun?.retryRunStatus ?? "-"} · final: {autofixRetryRun?.finalRunStatus ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                failureStep: {autofixRetryRun?.failureStep ?? autofixSelfHeal?.failureStep ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                analyzeFailed: {autofixRetryRun?.analyzeFailed ? "true" : "false"} · testFailed: {autofixRetryRun?.testFailed ? "true" : "false"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                removedFlags: {(autofixSelfHeal?.removedFlags ?? []).length > 0 ? (autofixSelfHeal?.removedFlags ?? []).join(", ") : "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                notes: {autofixRetryRun?.notes ?? autofixSelfHeal?.reason ?? "-"}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={refreshAutofixState}
+            disabled={autofixBusy}
+            style={{
+              width: "fit-content",
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: autofixBusy ? "#222" : "#1a1a1a",
+              color: autofixBusy ? "#888" : "#fff",
+              cursor: autofixBusy ? "not-allowed" : "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Refresh Auto-Fix
+          </button>
+        </div>
 
         <div
           style={{
