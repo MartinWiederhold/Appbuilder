@@ -66,6 +66,18 @@ type AutofixSelfHealState = {
   reason?: string;
 };
 
+
+type AutofixApprovalState = {
+  safeMode?: boolean;
+  approvalStatus?: string;
+  requiresHumanApproval?: boolean;
+  createdAt?: string | number;
+  project?: string;
+  provider?: string;
+  sourceArtifact?: string;
+  reason?: string;
+};
+
 type AutofixRetryRunState = {
   retryRunStatus?: string;
   finalRunStatus?: string;
@@ -218,6 +230,9 @@ export default function App() {
   const [autofixSelfHeal, setAutofixSelfHeal] = useState<AutofixSelfHealState | null>(null);
   const [autofixRetryRun, setAutofixRetryRun] = useState<AutofixRetryRunState | null>(null);
   const [autofixBusy, setAutofixBusy] = useState(false);
+  const [autofixApproval, setAutofixApproval] = useState<AutofixApprovalState | null>(null);
+  const [artifactMap, setArtifactMap] = useState<Record<string, string>>({});
+  const [selectedArtifact, setSelectedArtifact] = useState<string>("autofix.retry.run.json");
 
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
@@ -332,21 +347,42 @@ export default function App() {
     try {
       setAutofixBusy(true);
 
-      const selfHealRaw = await invoke<string>("read_file_if_exists", {
-        project,
-        relativePath: ".builder/autofix.selfheal.json",
-      }).catch(() => "");
+      const artifactNames = [
+        "autofix.json",
+        "autofix.apply.json",
+        "autofix.patch.json",
+        "autofix.result.json",
+        "autofix.retry.json",
+        "autofix.retry.run.json",
+        "autofix.selfheal.json",
+        "autofix.approval.json",
+      ];
 
-      const retryRunRaw = await invoke<string>("read_file_if_exists", {
-        project,
-        relativePath: ".builder/autofix.retry.run.json",
-      }).catch(() => "");
+      const entries = await Promise.all(
+        artifactNames.map(async (name) => {
+          const raw = await invoke<string>("read_file_if_exists", {
+            project,
+            relativePath: `.builder/${name}`,
+          }).catch(() => "");
+          return [name, String(raw || "")] as const;
+        })
+      );
 
-      setAutofixSelfHeal(selfHealRaw ? parseJsonSafe<AutofixSelfHealState>(String(selfHealRaw)) : null);
-      setAutofixRetryRun(retryRunRaw ? parseJsonSafe<AutofixRetryRunState>(String(retryRunRaw)) : null);
+      const nextMap: Record<string, string> = Object.fromEntries(entries);
+      setArtifactMap(nextMap);
+
+      const selfHealRaw = nextMap["autofix.selfheal.json"] ?? "";
+      const retryRunRaw = nextMap["autofix.retry.run.json"] ?? "";
+      const approvalRaw = nextMap["autofix.approval.json"] ?? "";
+
+      setAutofixSelfHeal(selfHealRaw ? parseJsonSafe<AutofixSelfHealState>(selfHealRaw) : null);
+      setAutofixRetryRun(retryRunRaw ? parseJsonSafe<AutofixRetryRunState>(retryRunRaw) : null);
+      setAutofixApproval(approvalRaw ? parseJsonSafe<AutofixApprovalState>(approvalRaw) : null);
     } catch {
       setAutofixSelfHeal(null);
       setAutofixRetryRun(null);
+      setAutofixApproval(null);
+      setArtifactMap({});
     } finally {
       setAutofixBusy(false);
     }
@@ -974,8 +1010,81 @@ export default function App() {
               <div style={{ fontSize: 12, color: "#aaa" }}>
                 notes: {autofixRetryRun?.notes ?? autofixSelfHeal?.reason ?? "-"}
               </div>
+              <div style={{ fontSize: 12, color: "#fff" }}>
+                safeMode: {autofixApproval?.safeMode ? "true" : "false"} · approval: {autofixApproval?.approvalStatus ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                requiresHumanApproval: {autofixApproval?.requiresHumanApproval ? "true" : "false"} · source: {autofixApproval?.sourceArtifact ?? "-"}
+              </div>
             </div>
           )}
+
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              marginTop: 8,
+              paddingTop: 8,
+              borderTop: "1px solid #222",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#fff" }}>
+              Artifact Inspector
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {[
+                "autofix.json",
+                "autofix.apply.json",
+                "autofix.patch.json",
+                "autofix.result.json",
+                "autofix.retry.json",
+                "autofix.retry.run.json",
+                "autofix.selfheal.json",
+                "autofix.approval.json",
+              ].map((name) => {
+                const hasData = !!artifactMap[name];
+                const selected = selectedArtifact === name;
+                return (
+                  <button
+                    key={name}
+                    onClick={() => setSelectedArtifact(name)}
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: selected ? "1px solid #fff" : "1px solid #333",
+                      background: selected ? "#fff" : hasData ? "#1a1a1a" : "#111",
+                      color: selected ? "#000" : hasData ? "#fff" : "#666",
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {name}
+                  </button>
+                );
+              })}
+            </div>
+
+            <textarea
+              readOnly
+              value={artifactMap[selectedArtifact] || ""}
+              placeholder="No artifact content"
+              style={{
+                width: "100%",
+                minHeight: 220,
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #333",
+                background: "#0d0d0d",
+                color: "#ddd",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: 12,
+                lineHeight: 1.45,
+                resize: "vertical",
+              }}
+            />
+          </div>
 
           <button
             onClick={refreshAutofixState}
