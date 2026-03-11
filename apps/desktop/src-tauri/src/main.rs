@@ -732,6 +732,38 @@ fn update_autofix_retry_run_artifact(
     let source_artifact = existing.get("sourceArtifact").and_then(|v| v.as_str()).unwrap_or("autofix.retry.json");
     let reason = existing.get("reason").and_then(|v| v.as_str()).unwrap_or("");
 
+    let run_json_path = project_dir.join("run.json");
+    let run_json = std::fs::read_to_string(&run_json_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let steps = run_json
+        .get("steps")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut failure_step = "";
+    let mut analyze_failed = false;
+    let mut test_failed = false;
+    let mut failure_exit_code = run_json.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(1);
+
+    for step in &steps {
+        let name = step.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let code = step.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
+        if code != 0 && failure_step.is_empty() {
+            failure_step = name;
+            failure_exit_code = code;
+        }
+        if name == "flutter_analyze" && code != 0 {
+            analyze_failed = true;
+        }
+        if name == "flutter_test" && code != 0 {
+            test_failed = true;
+        }
+    }
+
     let payload = serde_json::json!({
         "retryRunStatus": retry_status,
         "createdAt": existing.get("createdAt").cloned().unwrap_or_else(|| serde_json::json!(now_ts())),
@@ -743,7 +775,15 @@ fn update_autofix_retry_run_artifact(
         "sourceArtifact": source_artifact,
         "reason": reason,
         "finalRunStatus": final_run_status,
-        "notes": notes
+        "notes": notes,
+        "runId": run_json.get("runId").cloned().unwrap_or(Value::Null),
+        "startedAt": run_json.get("startedAt").cloned().unwrap_or(Value::Null),
+        "updatedAt": run_json.get("updatedAt").cloned().unwrap_or(Value::Null),
+        "finishedAtSource": run_json.get("finishedAt").cloned().unwrap_or(Value::Null),
+        "failureStep": if failure_step.is_empty() { Value::Null } else { serde_json::json!(failure_step) },
+        "failureExitCode": failure_exit_code,
+        "analyzeFailed": analyze_failed,
+        "testFailed": test_failed
     });
 
     let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
