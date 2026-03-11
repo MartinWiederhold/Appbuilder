@@ -231,6 +231,7 @@ export default function App() {
   const [autofixRetryRun, setAutofixRetryRun] = useState<AutofixRetryRunState | null>(null);
   const [autofixBusy, setAutofixBusy] = useState(false);
   const [autofixApproval, setAutofixApproval] = useState<AutofixApprovalState | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [artifactMap, setArtifactMap] = useState<Record<string, string>>({});
   const [selectedArtifact, setSelectedArtifact] = useState<string>("autofix.retry.run.json");
 
@@ -385,6 +386,22 @@ export default function App() {
       setArtifactMap({});
     } finally {
       setAutofixBusy(false);
+    }
+  }
+
+  async function onSetApprovalStatus(nextStatus: "approved" | "rejected") {
+    try {
+      setApprovalBusy(true);
+      await invoke("set_autofix_approval_status", {
+        project,
+        status: nextStatus,
+      });
+      setLogs((prev) => [...prev, `[ui] approval status updated -> ${nextStatus}`]);
+      await refreshAutofixState();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] approval update failed: ${String(e)}`]);
+    } finally {
+      setApprovalBusy(false);
     }
   }
 
@@ -1015,6 +1032,40 @@ export default function App() {
               </div>
               <div style={{ fontSize: 12, color: "#aaa" }}>
                 requiresHumanApproval: {autofixApproval?.requiresHumanApproval ? "true" : "false"} · source: {autofixApproval?.sourceArtifact ?? "-"}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => onSetApprovalStatus("approved")}
+                  disabled={approvalBusy || !autofixApproval}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: approvalBusy || !autofixApproval ? "#222" : "#9ee37d",
+                    color: approvalBusy || !autofixApproval ? "#888" : "#000",
+                    cursor: approvalBusy || !autofixApproval ? "not-allowed" : "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  Approve Patch
+                </button>
+
+                <button
+                  onClick={() => onSetApprovalStatus("rejected")}
+                  disabled={approvalBusy || !autofixApproval}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: approvalBusy || !autofixApproval ? "#222" : "#3a1a1a",
+                    color: approvalBusy || !autofixApproval ? "#888" : "#ffb3b3",
+                    cursor: approvalBusy || !autofixApproval ? "not-allowed" : "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  Reject Patch
+                </button>
               </div>
             </div>
           )}

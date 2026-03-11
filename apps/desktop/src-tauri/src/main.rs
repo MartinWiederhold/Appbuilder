@@ -476,6 +476,57 @@ fn read_run_history(project: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn set_autofix_approval_status(
+  project: String,
+  status: String,
+) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  let builder_dir = project_dir.join(".builder");
+  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+  let artifact_path = builder_dir.join("autofix.approval.json");
+
+  let existing = std::fs::read_to_string(&artifact_path)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    .unwrap_or_else(|| serde_json::json!({}));
+
+  let safe_mode = existing.get("safeMode").cloned().unwrap_or_else(|| serde_json::json!(true));
+  let requires_human_approval = existing.get("requiresHumanApproval").cloned().unwrap_or_else(|| serde_json::json!(true));
+  let created_at = existing.get("createdAt").cloned().unwrap_or_else(|| serde_json::json!(now_ts()));
+  let provider = existing.get("provider").cloned().unwrap_or(Value::Null);
+  let source_artifact = existing.get("sourceArtifact").cloned().unwrap_or_else(|| serde_json::json!("autofix.patch.json"));
+  let reason = existing.get("reason").cloned().unwrap_or_else(|| serde_json::json!("Safe Mode requires explicit review before controlled patch execution."));
+
+  let normalized = match status.as_str() {
+    "approved" => "approved",
+    "rejected" => "rejected",
+    "pending" => "pending",
+    _ => return Err(format!("invalid approval status: {}", status)),
+  };
+
+  let payload = serde_json::json!({
+    "safeMode": safe_mode,
+    "approvalStatus": normalized,
+    "requiresHumanApproval": requires_human_approval,
+    "createdAt": created_at,
+    "updatedAt": now_ts(),
+    "project": project,
+    "provider": provider,
+    "sourceArtifact": source_artifact,
+    "reason": reason
+  });
+
+  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+  std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+  Ok(artifact_path.display().to_string())
+}
+
+
+#[tauri::command]
 fn read_file_if_exists(project: String, relativePath: String) -> Result<String, String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
@@ -1888,6 +1939,7 @@ fn main() {
         set_secret,
         start_live_flutter,
         reveal_project,
+        set_autofix_approval_status,
         read_file_if_exists,
         read_run_json_project,
         get_preflight_config,
