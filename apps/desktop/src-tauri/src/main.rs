@@ -1386,11 +1386,49 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                             let _ = app_handle.emit("agent:log", &proposal);
 
                             let retry_prompt = sanitize_retry_prompt(&prompt);
+
+                            let current_run_json = std::fs::read_to_string(
+                                repo_root.join("workspace").join("projects").join(&project).join("run.json")
+                            )
+                            .ok()
+                            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+
+                            let retry_failure_step = current_run_json
+                                .as_ref()
+                                .and_then(|v| v.get("steps"))
+                                .and_then(|v| v.as_array())
+                                .and_then(|steps| {
+                                    for step in steps {
+                                        let name = step.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                        let code = step.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
+                                        if code != 0 {
+                                            return Some(name.to_string());
+                                        }
+                                    }
+                                    None
+                                })
+                                .unwrap_or_default();
+
+                            let retry_allowed_failure =
+                                retry_failure_step == "flutter_analyze" ||
+                                retry_failure_step == "flutter_test";
+
                             let retry_needed = retry_prompt.trim() != prompt.trim()
-                                && !proposal.starts_with("[autofix] provider request failed:");
+                                && !proposal.starts_with("[autofix] provider request failed:")
+                                && retry_allowed_failure;
+
+                            if !retry_allowed_failure {
+                                let _ = app_handle.emit(
+                                    "agent:log",
+                                    format!("[autofix] retry skipped: unsupported failure step '{}'", retry_failure_step)
+                                );
+                            }
 
                             if retry_needed {
-                                let _ = app_handle.emit("agent:log", "[autofix] retry starting with sanitized prompt");
+                                let _ = app_handle.emit(
+                                    "agent:log",
+                                    format!("[autofix] retry starting with sanitized prompt (failure_step={})", retry_failure_step)
+                                );
                                 let _ = app_handle.emit("phase:update", "generate");
 
                                 match run_node_agent_once(
