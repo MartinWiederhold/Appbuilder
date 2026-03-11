@@ -708,6 +708,50 @@ fn run_node_agent_once(
 }
 
 
+
+fn update_autofix_retry_run_artifact(
+    project_dir: &std::path::Path,
+    retry_status: &str,
+    final_run_status: &str,
+    notes: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builder_dir = project_dir.join(".builder");
+    std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+    let artifact_path = builder_dir.join("autofix.retry.run.json");
+
+    let existing = std::fs::read_to_string(&artifact_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let project = existing.get("project").and_then(|v| v.as_str()).unwrap_or("");
+    let provider = existing.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+    let mode = existing.get("mode").and_then(|v| v.as_str()).unwrap_or("full");
+    let stop_after = existing.get("stopAfter").and_then(|v| v.as_str()).unwrap_or("none");
+    let source_artifact = existing.get("sourceArtifact").and_then(|v| v.as_str()).unwrap_or("autofix.retry.json");
+    let reason = existing.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+
+    let payload = serde_json::json!({
+        "retryRunStatus": retry_status,
+        "createdAt": existing.get("createdAt").cloned().unwrap_or_else(|| serde_json::json!(now_ts())),
+        "finishedAt": now_ts(),
+        "project": project,
+        "provider": provider,
+        "mode": mode,
+        "stopAfter": stop_after,
+        "sourceArtifact": source_artifact,
+        "reason": reason,
+        "finalRunStatus": final_run_status,
+        "notes": notes
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+    Ok(artifact_path)
+}
+
+
 fn write_autofix_retry_run_artifact(
     project_dir: &std::path::Path,
     project: &str,
@@ -1356,16 +1400,58 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                                             .unwrap_or("");
 
                                         if retry_run_status == "success" || (retry_out.status.success() && !retry_killed) {
+                                            match update_autofix_retry_run_artifact(
+                                                &repo_root.join("workspace").join("projects").join(&project),
+                                                "succeeded",
+                                                "success",
+                                                "Retry completed successfully after sanitized prompt rerun.",
+                                            ) {
+                                                Ok(path) => {
+                                                    let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact updated: {}", path.display()));
+                                                }
+                                                Err(e) => {
+                                                    let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact update failed: {}", e));
+                                                }
+                                            }
+
                                             let _ = app_handle.emit("agent:log", "[autofix] retry succeeded");
                                             let _ = app_handle.emit("phase:update", "done");
                                             let _ = app_handle.emit("agent:done", "ok");
                                         } else {
+                                            match update_autofix_retry_run_artifact(
+                                                &repo_root.join("workspace").join("projects").join(&project),
+                                                "failed",
+                                                "failed",
+                                                "Retry rerun completed but run.json did not reach success.",
+                                            ) {
+                                                Ok(path) => {
+                                                    let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact updated: {}", path.display()));
+                                                }
+                                                Err(e) => {
+                                                    let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact update failed: {}", e));
+                                                }
+                                            }
+
                                             let _ = app_handle.emit("agent:log", "[autofix] retry failed");
                                             let _ = app_handle.emit("phase:update", "error");
                                             let _ = app_handle.emit("agent:done", format!("error ({})", retry_out.status));
                                         }
                                     }
                                     Err(e) => {
+                                        match update_autofix_retry_run_artifact(
+                                            &repo_root.join("workspace").join("projects").join(&project),
+                                            "failed",
+                                            "spawn_error",
+                                            &format!("Retry spawn failed: {}", e),
+                                        ) {
+                                            Ok(path) => {
+                                                let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact updated: {}", path.display()));
+                                            }
+                                            Err(err2) => {
+                                                let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact update failed: {}", err2));
+                                            }
+                                        }
+
                                         let _ = app_handle.emit("agent:log", format!("[autofix] retry spawn failed: {}", e));
                                         let _ = app_handle.emit("phase:update", "error");
                                         let _ = app_handle.emit("agent:done", format!("error ({})", out.status));
