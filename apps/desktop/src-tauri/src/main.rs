@@ -618,6 +618,35 @@ fn get_secret_value(name: &str) -> Result<String, String> {
 
 
 
+
+fn write_autofix_retry_run_artifact(
+    project_dir: &std::path::Path,
+    project: &str,
+    provider: &str,
+    mode: &str,
+    stop_after: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builder_dir = project_dir.join(".builder");
+    std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+    let artifact_path = builder_dir.join("autofix.retry.run.json");
+    let payload = serde_json::json!({
+        "retryRunStatus": "planned",
+        "createdAt": now_ts(),
+        "project": project,
+        "provider": provider,
+        "mode": mode,
+        "stopAfter": stop_after,
+        "sourceArtifact": "autofix.retry.json",
+        "reason": "Retry artifact is ready; retry run can be triggered next."
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+    Ok(artifact_path)
+}
+
+
 fn write_autofix_retry_artifact(
     project_dir: &std::path::Path,
     project: &str,
@@ -1159,6 +1188,23 @@ let proposal = match get_secret_value("OPENAI_API_KEY") {
                                     }
                                     Err(e) => {
                                         let _ = app_handle.emit("agent:log", format!("[autofix] retry artifact write failed: {}", e));
+                                    }
+                                }
+                            }
+
+                            if !proposal.starts_with("[autofix] provider request failed:") {
+                                match write_autofix_retry_run_artifact(
+                                    &project_dir,
+                                    &project,
+                                    &provider,
+                                    "full",
+                                    "none",
+                                ) {
+                                    Ok(path) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact written: {}", path.display()));
+                                    }
+                                    Err(e) => {
+                                        let _ = app_handle.emit("agent:log", format!("[autofix] retry run artifact write failed: {}", e));
                                     }
                                 }
                             }
