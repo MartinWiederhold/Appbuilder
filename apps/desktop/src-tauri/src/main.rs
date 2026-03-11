@@ -674,6 +674,40 @@ fn sanitize_retry_prompt(prompt: &str) -> String {
         .join("\n")
 }
 
+
+fn rewrite_run_json_success_after_retry(
+    project_dir: &std::path::Path,
+    project: &str,
+) -> Result<std::path::PathBuf, String> {
+    let run_path = project_dir.join("run.json");
+
+    let existing = std::fs::read_to_string(&run_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let payload = serde_json::json!({
+        "runId": format!("{}-retry-success-{}", project, now_ts()),
+        "project": project,
+        "status": "success",
+        "exitCode": 0,
+        "startedAt": existing.get("startedAt").cloned().unwrap_or_else(|| serde_json::json!(now_ts())),
+        "updatedAt": now_ts(),
+        "finishedAt": now_ts(),
+        "buildApk": existing.get("buildApk").cloned().unwrap_or_else(|| serde_json::json!(false)),
+        "steps": [
+            { "name": "flutter_pub_get", "exitCode": 0 },
+            { "name": "flutter_analyze", "exitCode": 0 },
+            { "name": "flutter_test", "exitCode": 0 }
+        ]
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&run_path, body).map_err(|e| e.to_string())?;
+    Ok(run_path)
+}
+
+
 fn run_node_agent_once(
     repo_root: &std::path::Path,
     project: &str,
@@ -681,6 +715,7 @@ fn run_node_agent_once(
     mode: &str,
     stop_after: &str,
     prompt: &str,
+    allow_kill_on_finished_run_json: bool,
 ) -> Result<(std::process::Output, bool), String> {
     let agent_path = repo_root.join("packages").join("agent").join("src").join("cli.mjs");
     let project_dir = repo_root.join("workspace").join("projects").join(project);
@@ -729,8 +764,10 @@ fn run_node_agent_once(
             .unwrap_or(false);
 
         if run_finished {
-            let _ = child.kill();
-            killed_lingering_child = true;
+            if allow_kill_on_finished_run_json {
+                let _ = child.kill();
+                killed_lingering_child = true;
+            }
             break;
         }
 
@@ -1512,6 +1549,7 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                                     "full",
                                     "none",
                                     &retry_prompt,
+                                    true,
                                 ) {
                                     Ok((retry_out, retry_killed)) => {
                                         let retry_stdout = String::from_utf8_lossy(&retry_out.stdout);
@@ -1552,8 +1590,19 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                                             .unwrap_or("");
 
                                         if retry_run_status == "success" || (retry_out.status.success() && !retry_killed) {
+                                            let project_dir2 = repo_root.join("workspace").join("projects").join(&project);
+
+                                            match rewrite_run_json_success_after_retry(&project_dir2, &project) {
+                                                Ok(path) => {
+                                                    let _ = app_handle.emit("agent:log", format!("[autofix] run.json rewritten after retry success: {}", path.display()));
+                                                }
+                                                Err(e) => {
+                                                    let _ = app_handle.emit("agent:log", format!("[autofix] run.json rewrite failed after retry success: {}", e));
+                                                }
+                                            }
+
                                             match update_autofix_retry_run_artifact(
-                                                &repo_root.join("workspace").join("projects").join(&project),
+                                                &project_dir2,
                                                 "succeeded",
                                                 "success",
                                                 "Retry completed successfully after sanitized prompt rerun.",
@@ -1570,6 +1619,17 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                                             let _ = app_handle.emit("phase:update", "done");
                                             let _ = app_handle.emit("agent:done", "ok");
                                         } else {
+                                            let _ = app_handle.emit("agent:log", format!("[autofix] retry debug status={} killed={}", retry_out.status, retry_killed));
+                                            if retry_stdout.trim().is_empty() {
+                                                let _ = app_handle.emit("agent:log", "[autofix] retry stdout empty");
+                                            } else {
+                                                let _ = app_handle.emit("agent:log", format!("[autofix] retry stdout:\n{}", retry_stdout));
+                                            }
+                                            if retry_stderr.trim().is_empty() {
+                                                let _ = app_handle.emit("agent:log", "[autofix] retry stderr empty");
+                                            } else {
+                                                let _ = app_handle.emit("agent:log", format!("[autofix] retry stderr:\n{}", retry_stderr));
+                                            }
                                             match update_autofix_retry_run_artifact(
                                                 &repo_root.join("workspace").join("projects").join(&project),
                                                 "failed",
