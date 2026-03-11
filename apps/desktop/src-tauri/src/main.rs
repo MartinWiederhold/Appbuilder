@@ -620,6 +620,49 @@ fn get_secret_value(name: &str) -> Result<String, String> {
 
 
 
+
+fn removed_retry_flags(prompt: &str) -> Vec<String> {
+    let mut removed: Vec<String> = Vec::new();
+
+    for line in prompt.lines() {
+        let l = line.trim().to_lowercase();
+        if l == "inject_error: true" {
+            removed.push("inject_error: true".to_string());
+        } else if l == "force_invalid_widget: true" {
+            removed.push("force_invalid_widget: true".to_string());
+        }
+    }
+
+    removed
+}
+
+fn write_autofix_selfheal_artifact(
+    project_dir: &std::path::Path,
+    original_prompt: &str,
+    sanitized_prompt: &str,
+    removed_flags: Vec<String>,
+    failure_step: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builder_dir = project_dir.join(".builder");
+    std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+    let artifact_path = builder_dir.join("autofix.selfheal.json");
+    let payload = serde_json::json!({
+        "selfHealStatus": "applied_prompt_sanitization",
+        "createdAt": now_ts(),
+        "failureStep": failure_step,
+        "removedFlags": removed_flags,
+        "originalPrompt": original_prompt,
+        "sanitizedPrompt": sanitized_prompt,
+        "reason": "Known MVP self-heal path removed explicit error injection flags before retry."
+    });
+
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+    Ok(artifact_path)
+}
+
+
 fn sanitize_retry_prompt(prompt: &str) -> String {
     prompt
         .lines()
@@ -1413,6 +1456,8 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                                 retry_failure_step == "flutter_analyze" ||
                                 retry_failure_step == "flutter_test";
 
+                            let removed_flags = removed_retry_flags(&prompt);
+
                             let retry_needed = retry_prompt.trim() != prompt.trim()
                                 && !proposal.starts_with("[autofix] provider request failed:")
                                 && retry_allowed_failure;
@@ -1425,6 +1470,35 @@ let _ = app_handle.emit("agent:log", "[autofix] fix proposal received");
                             }
 
                             if retry_needed {
+                                match write_autofix_selfheal_artifact(
+                                    &repo_root.join("workspace").join("projects").join(&project),
+                                    &prompt,
+                                    &retry_prompt,
+                                    removed_flags.clone(),
+                                    &retry_failure_step,
+                                ) {
+                                    Ok(path) => {
+                                        let _ = app_handle.emit(
+                                            "agent:log",
+                                            format!("[autofix] self-heal artifact written: {}", path.display())
+                                        );
+                                    }
+                                    Err(e) => {
+                                        let _ = app_handle.emit(
+                                            "agent:log",
+                                            format!("[autofix] self-heal artifact write failed: {}", e)
+                                        );
+                                    }
+                                }
+
+                                let _ = app_handle.emit(
+                                    "agent:log",
+                                    format!(
+                                        "[autofix] self-heal applied: removed flags [{}]",
+                                        removed_flags.join(", ")
+                                    )
+                                );
+
                                 let _ = app_handle.emit(
                                     "agent:log",
                                     format!("[autofix] retry starting with sanitized prompt (failure_step={})", retry_failure_step)
