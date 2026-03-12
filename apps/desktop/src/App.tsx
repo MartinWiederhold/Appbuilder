@@ -1529,7 +1529,7 @@ export default function App() {
             {running ? "Running…" : "Run"}
           </button>
 
-          {true && (
+          {phase === "paused" && (
             <button
               onClick={onApproveContinue}
               disabled={running || runLocked}
