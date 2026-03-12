@@ -12,6 +12,87 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 
+
+fn load_run_json_value(project: &str) -> Result<(std::path::PathBuf, serde_json::Value), String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let run_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project)
+    .join("run.json");
+
+  let raw = std::fs::read_to_string(&run_path)
+    .map_err(|e| format!("Failed to read run.json: {}", e))?;
+
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
+
+  Ok((run_path, parsed))
+}
+
+fn save_run_json_value(path: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
+  let body = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+  std::fs::write(path, body).map_err(|e| format!("Failed to write run.json: {}", e))
+}
+
+fn mark_run_running(project: &str, phase: &str, step: Option<&str>) -> Result<(), String> {
+  let (run_path, mut parsed) = load_run_json_value(project)?;
+
+  if !parsed.is_object() {
+    return Err("run.json is not a JSON object".to_string());
+  }
+
+  parsed["status"] = serde_json::json!("running");
+  parsed["phase"] = serde_json::json!(phase);
+  parsed["finishedAt"] = serde_json::Value::Null;
+  parsed["updatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+
+  match step {
+    Some(v) => parsed["step"] = serde_json::json!(v),
+    None => parsed["step"] = serde_json::Value::Null,
+  }
+
+  save_run_json_value(&run_path, &parsed)
+}
+
+fn mark_run_paused(project: &str, step: &str) -> Result<(), String> {
+  let (run_path, mut parsed) = load_run_json_value(project)?;
+
+  if !parsed.is_object() {
+    return Err("run.json is not a JSON object".to_string());
+  }
+
+  parsed["status"] = serde_json::json!("paused");
+  parsed["phase"] = serde_json::json!("paused");
+  parsed["step"] = serde_json::json!(step);
+  parsed["finishedAt"] = serde_json::Value::Null;
+  parsed["updatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+
+  save_run_json_value(&run_path, &parsed)
+}
+
+fn mark_run_finished(project: &str, status: &str, exit_code: i64) -> Result<(), String> {
+  let (run_path, mut parsed) = load_run_json_value(project)?;
+
+  if !parsed.is_object() {
+    return Err("run.json is not a JSON object".to_string());
+  }
+
+  let now = chrono::Utc::now().to_rfc3339();
+
+  parsed["status"] = serde_json::json!(status);
+  parsed["exitCode"] = serde_json::json!(exit_code);
+  parsed["phase"] = serde_json::Value::Null;
+  parsed["step"] = serde_json::Value::Null;
+  parsed["updatedAt"] = serde_json::json!(now.clone());
+  parsed["finishedAt"] = serde_json::json!(now);
+
+  save_run_json_value(&run_path, &parsed)
+}
+
+
 fn rehydrate_paused_run_for_continue(project: &str) -> Result<(), String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root".to_string())?;
@@ -26,26 +107,7 @@ fn rehydrate_paused_run_for_continue(project: &str) -> Result<(), String> {
     return Ok(());
   }
 
-  let raw = std::fs::read_to_string(&run_path)
-    .map_err(|e| format!("Failed to read run.json: {}", e))?;
-
-  let mut parsed: serde_json::Value =
-    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
-
-  if !parsed.is_object() {
-    return Err("run.json is not a JSON object".to_string());
-  }
-
-  parsed["status"] = serde_json::json!("running");
-  parsed["phase"] = serde_json::json!("generate");
-  parsed["step"] = serde_json::Value::Null;
-  parsed["finishedAt"] = serde_json::Value::Null;
-  parsed["updatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
-
-  let body = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
-  std::fs::write(&run_path, body).map_err(|e| format!("Failed to write run.json: {}", e))?;
-
-  Ok(())
+  mark_run_running(project, "generate", None)
 }
 
 
