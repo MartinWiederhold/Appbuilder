@@ -153,10 +153,68 @@ fn resolve_artifact_write_path(project: &str, file_name: &str) -> Result<std::pa
   Ok(builder_dir.join(frozen_name))
 }
 
+
+fn current_run_id(project: &str) -> Result<Option<String>, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let run_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project)
+    .join("run.json");
+
+  if !run_path.exists() {
+    return Ok(None);
+  }
+
+  let raw = std::fs::read_to_string(&run_path)
+    .map_err(|e| format!("Failed to read run.json: {}", e))?;
+
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
+
+  Ok(
+    parsed
+      .get("runId")
+      .and_then(|v| v.as_str())
+      .map(|s| s.to_string())
+  )
+}
+
+fn write_history_artifact(project: &str, file_name: &str, payload: &serde_json::Value) -> Result<(), String> {
+  let run_id = match current_run_id(project)? {
+    Some(v) if !v.trim().is_empty() => v,
+    _ => return Ok(()),
+  };
+
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let history_dir = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project)
+    .join(".builder")
+    .join("history")
+    .join(run_id);
+
+  std::fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
+
+  let history_path = history_dir.join(file_name);
+  let body = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
+  std::fs::write(&history_path, body)
+    .map_err(|e| format!("Failed to write history artifact {}: {}", history_path.display(), e))?;
+
+  Ok(())
+}
+
+
 fn write_json_artifact(project: &str, file_name: &str, payload: &serde_json::Value) -> Result<String, String> {
   let path = resolve_artifact_write_path(project, file_name)?;
   let body = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
   std::fs::write(&path, body).map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+  write_history_artifact(project, file_name, payload)?;
   Ok(path.display().to_string())
 }
 
