@@ -69,6 +69,19 @@ type AutofixSelfHealState = {
 
 
 
+
+type AutofixRerunState = {
+  createdAt?: string | number;
+  project?: string;
+  rerunStatus?: string;
+  analyzeExitCode?: number;
+  testExitCode?: number;
+  analyzePassed?: boolean;
+  testPassed?: boolean;
+  reason?: string;
+  sourceArtifact?: string;
+};
+
 type AutofixExecutionResultState = {
   executionResultStatus?: string;
   createdAt?: string | number;
@@ -256,6 +269,7 @@ export default function App() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [autofixExecution, setAutofixExecution] = useState<AutofixExecutionState | null>(null);
   const [autofixExecutionResult, setAutofixExecutionResult] = useState<AutofixExecutionResultState | null>(null);
+  const [autofixRerun, setAutofixRerun] = useState<AutofixRerunState | null>(null);
   const [artifactMap, setArtifactMap] = useState<Record<string, string>>({});
   const [selectedArtifact, setSelectedArtifact] = useState<string>("autofix.retry.run.json");
 
@@ -383,6 +397,7 @@ export default function App() {
         "autofix.approval.json",
         "autofix.execution.json",
         "autofix.execution.result.json",
+        "autofix.rerun.json",
       ];
 
       const entries = await Promise.all(
@@ -403,18 +418,21 @@ export default function App() {
       const approvalRaw = nextMap["autofix.approval.json"] ?? "";
       const executionRaw = nextMap["autofix.execution.json"] ?? "";
       const executionResultRaw = nextMap["autofix.execution.result.json"] ?? "";
+      const rerunRaw = nextMap["autofix.rerun.json"] ?? "";
 
       setAutofixSelfHeal(selfHealRaw ? parseJsonSafe<AutofixSelfHealState>(selfHealRaw) : null);
       setAutofixRetryRun(retryRunRaw ? parseJsonSafe<AutofixRetryRunState>(retryRunRaw) : null);
       setAutofixApproval(approvalRaw ? parseJsonSafe<AutofixApprovalState>(approvalRaw) : null);
       setAutofixExecution(executionRaw ? parseJsonSafe<AutofixExecutionState>(executionRaw) : null);
       setAutofixExecutionResult(executionResultRaw ? parseJsonSafe<AutofixExecutionResultState>(executionResultRaw) : null);
+      setAutofixRerun(rerunRaw ? parseJsonSafe<AutofixRerunState>(rerunRaw) : null);
     } catch {
       setAutofixSelfHeal(null);
       setAutofixRetryRun(null);
       setAutofixApproval(null);
       setAutofixExecution(null);
       setAutofixExecutionResult(null);
+      setAutofixRerun(null);
       setArtifactMap({});
     } finally {
       setAutofixBusy(false);
@@ -458,6 +476,19 @@ export default function App() {
       await refreshAutofixState();
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] controlled patch execution failed: ${String(e)}`]);
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
+  async function onRerunAfterPatch() {
+    try {
+      setApprovalBusy(true);
+      await invoke("rerun_after_patch", { project });
+      setLogs((prev) => [...prev, "[ui] rerun after patch completed"]);
+      await refreshAutofixState();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] rerun after patch failed: ${String(e)}`]);
     } finally {
       setApprovalBusy(false);
     }
@@ -1106,6 +1137,17 @@ export default function App() {
               <div style={{ fontSize: 12, color: "#aaa" }}>
                 executionResultReason: {autofixExecutionResult?.reason ?? "-"}
               </div>
+              <div style={{ fontSize: 12, color: "#fff" }}>
+                rerun: {autofixRerun?.rerunStatus ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                rerunAnalyze: {autofixRerun?.analyzePassed ? "true" : "false"} ({autofixRerun?.analyzeExitCode ?? "-"})
+                {" · "}
+                rerunTest: {autofixRerun?.testPassed ? "true" : "false"} ({autofixRerun?.testExitCode ?? "-"})
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                rerunReason: {autofixRerun?.reason ?? "-"}
+              </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
@@ -1171,6 +1213,22 @@ export default function App() {
                 >
                   Execute Approved Patch
                 </button>
+
+                <button
+                  onClick={onRerunAfterPatch}
+                  disabled={approvalBusy || !["executed", "noop"].includes(autofixExecutionResult?.executionResultStatus ?? "")}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: approvalBusy || !["executed", "noop"].includes(autofixExecutionResult?.executionResultStatus ?? "") ? "#222" : "#1a1a1a",
+                    color: approvalBusy || !["executed", "noop"].includes(autofixExecutionResult?.executionResultStatus ?? "") ? "#888" : "#fff",
+                    cursor: approvalBusy || !["executed", "noop"].includes(autofixExecutionResult?.executionResultStatus ?? "") ? "not-allowed" : "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  Re-Run After Patch
+                </button>
               </div>
             </div>
           )}
@@ -1200,6 +1258,7 @@ export default function App() {
                 "autofix.approval.json",
                 "autofix.execution.json",
                 "autofix.execution.result.json",
+                "autofix.rerun.json",
               ].map((name) => {
                 const hasData = !!artifactMap[name];
                 const selected = selectedArtifact === name;

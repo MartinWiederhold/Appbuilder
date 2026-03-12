@@ -476,6 +476,67 @@ fn read_run_history(project: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn rerun_after_patch(project: String) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  let builder_dir = project_dir.join(".builder");
+  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+  let analyze = Command::new("flutter")
+    .arg("analyze")
+    .current_dir(&project_dir)
+    .status()
+    .map_err(|e| format!("flutter analyze failed to start: {}", e))?;
+
+  let test = Command::new("flutter")
+    .arg("test")
+    .current_dir(&project_dir)
+    .status()
+    .map_err(|e| format!("flutter test failed to start: {}", e))?;
+
+  let analyze_code = analyze.code().unwrap_or(1);
+  let test_code = test.code().unwrap_or(1);
+  let analyze_passed = analyze.success();
+  let test_passed = test.success();
+
+  let rerun_status = if analyze_passed && test_passed {
+    "passed"
+  } else {
+    "failed"
+  };
+
+  let reason = if analyze_passed && test_passed {
+    "Post-patch verification passed for flutter analyze and flutter test."
+  } else if !analyze_passed && !test_passed {
+    "Post-patch verification failed for both flutter analyze and flutter test."
+  } else if !analyze_passed {
+    "Post-patch verification failed for flutter analyze."
+  } else {
+    "Post-patch verification failed for flutter test."
+  };
+
+  let artifact_path = builder_dir.join("autofix.rerun.json");
+  let payload = serde_json::json!({
+    "createdAt": now_ts(),
+    "project": project,
+    "rerunStatus": rerun_status,
+    "analyzeExitCode": analyze_code,
+    "testExitCode": test_code,
+    "analyzePassed": analyze_passed,
+    "testPassed": test_passed,
+    "reason": reason,
+    "sourceArtifact": "autofix.execution.result.json"
+  });
+
+  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+  std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+  Ok(artifact_path.display().to_string())
+}
+
+
+#[tauri::command]
 fn execute_autofix_patch(project: String) -> Result<String, String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
@@ -2059,6 +2120,7 @@ fn main() {
         set_secret,
         start_live_flutter,
         reveal_project,
+        rerun_after_patch,
         execute_autofix_patch,
         evaluate_autofix_execution,
         set_autofix_approval_status,
