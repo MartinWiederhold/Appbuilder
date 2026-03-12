@@ -1,3 +1,5 @@
+
+
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{AppHandle, Emitter};
@@ -8,6 +10,38 @@ use std::process::{Command, Stdio};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn ensure_verified_rerun(project: &str) -> Result<(), String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let rerun_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project)
+    .join(".builder")
+    .join("autofix.rerun.json");
+
+  if !rerun_path.exists() {
+    return Err("Verified gate blocked: autofix.rerun.json not found".to_string());
+  }
+
+  let raw = std::fs::read_to_string(&rerun_path)
+    .map_err(|e| format!("Failed to read rerun file: {}", e))?;
+
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid rerun JSON: {}", e))?;
+
+  let status = parsed.get("rerunStatus")
+    .and_then(|v| v.as_str())
+    .unwrap_or("");
+
+  if status != "passed" {
+    return Err("Verified gate blocked: rerunStatus is not passed".to_string());
+  }
+
+  Ok(())
+}
 
 #[derive(Default)]
 struct RunConfig {
@@ -1461,6 +1495,12 @@ Mode: proposal_only",
 
 
 #[tauri::command]
+fn continue_agent(app: AppHandle, project: String, prompt: String, provider: String) -> Result<(), String> {
+    ensure_verified_rerun(&project)?;
+    run_agent(app, project, prompt, provider, "full".to_string(), "none".to_string())
+}
+
+#[tauri::command]
 fn run_agent(app: AppHandle, project: String, prompt: String, provider: String, mode: String, stop_after: String) -> Result<(), String> {
     let app_handle = app.clone();
     std::thread::spawn(move || {
@@ -2128,6 +2168,7 @@ fn main() {
         read_run_json_project,
         get_preflight_config,
         set_preflight_config,
+        continue_agent,
         run_agent,
         read_run_history
     ])

@@ -687,8 +687,20 @@ export default function App() {
 
   async function onApproveContinue() {
     if (running || runLocked) return;
-    setPausedAt("");
-    await startRun("full", "none");
+    try {
+      setPausedAt("");
+      await invoke("continue_agent", {
+        app: undefined,
+        project,
+        prompt,
+        provider,
+      });
+      setLogs((prev) => [...prev, "[ui] continue_agent started"]);
+      setRunning(true);
+      await refreshCurrentRun();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] continue_agent blocked: ${String(e)}`]);
+    }
   }
 
   const phaseItems: Array<{ key: Phase; label: string }> = [
@@ -1517,7 +1529,7 @@ export default function App() {
             {running ? "Running…" : "Run"}
           </button>
 
-          {phase === "paused" && (
+          {true && (
             <button
               onClick={onApproveContinue}
               disabled={running || runLocked}
