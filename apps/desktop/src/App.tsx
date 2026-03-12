@@ -3,6 +3,61 @@ import "./App.css";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
+const isE2E = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("e2e") === "1";
+
+async function readJsonFileIfExists(path: string) {
+  const res = await fetch(`/__e2e__/file?path=${encodeURIComponent(path)}`);
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isE2E) {
+    return await invokeCommand<T>(cmd, args);
+  }
+
+  const project = String(args?.project ?? "todo_flutter");
+  const projectRoot = `workspace/projects/${project}`;
+
+  if (cmd === "read_current_run") {
+    return (await readJsonFileIfExists(`${projectRoot}/run.json`)) as T;
+  }
+
+  if (cmd === "read_file_if_exists") {
+    const relPath = String(args?.path ?? "");
+    const artifactPath = `${projectRoot}/.builder/${relPath}`;
+    const res = await fetch(`/__e2e__/text?path=${encodeURIComponent(artifactPath)}`);
+    if (!res.ok) return "" as T;
+    return (await res.text()) as T;
+  }
+
+  if (cmd === "list_secrets") {
+    return ["OPENAI_API_KEY"] as T;
+  }
+
+  if (cmd === "get_preflight_config") {
+    return {
+      monetization: "free",
+      completed: true,
+      integrations: {},
+    } as T;
+  }
+
+  if (cmd === "continue_agent") {
+    const rerun = await readJsonFileIfExists(`${projectRoot}/.builder/autofix.rerun.json`);
+    if (!rerun || rerun.rerunStatus !== "passed") {
+      throw new Error("Verified gate blocked: rerunStatus is not passed");
+    }
+    return undefined as T;
+  }
+
+  if (cmd === "read_run_history") {
+    return [] as T;
+  }
+
+  throw new Error(`[e2e] Unsupported invoke command: ${cmd}`);
+}
+
 type AgentLogPayload = string;
 type Phase = "idle" | "generate" | "analyze" | "test" | "reload" | "done" | "paused" | "error";
 type Provider = "openai" | "anthropic";
@@ -273,6 +328,46 @@ export default function App() {
   const [artifactMap, setArtifactMap] = useState<Record<string, string>>({});
   const [selectedArtifact, setSelectedArtifact] = useState<string>("autofix.retry.run.json");
 
+  const e2eParams =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const e2eCurrentRun = e2eParams?.get("e2eCurrentRun");
+  const e2eRerun = e2eParams?.get("e2eRerun");
+
+
+
+  useEffect(() => {
+    if (!isE2E) return;
+
+    if (e2eCurrentRun === "paused") {
+      setCurrentRun({
+        runId: "e2e-run",
+        project,
+        status: "running",
+        startedAt: "2026-03-12T15:00:00.000Z",
+        finishedAt: null,
+        phase: "paused",
+        step: "human_approval",
+        steps: [],
+      } as CurrentRunState);
+    }
+
+    if (e2eRerun === "passed" || e2eRerun === "failed") {
+      setAutofixRerun({
+        project,
+        rerunStatus: e2eRerun,
+        analyzePassed: e2eRerun === "passed",
+        testPassed: e2eRerun === "passed",
+        analyzeExitCode: e2eRerun === "passed" ? 0 : 1,
+        testExitCode: e2eRerun === "passed" ? 0 : 1,
+        reason:
+          e2eRerun === "passed"
+            ? "E2E mocked rerun passed."
+            : "E2E mocked rerun failed.",
+        sourceArtifact: "autofix.execution.result.json",
+      } as AutofixRerunState);
+    }
+  }, [project, e2eCurrentRun, e2eRerun]);
+
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   const requiredSecretName =
@@ -281,6 +376,14 @@ export default function App() {
   const providerSecretPresent = secretNames.includes(requiredSecretName);
   const preflightComplete = isPreflightComplete(preflightConfig);
   const runPossiblyActive = isRunPossiblyActive(currentRun);
+  const verifiedForContinue = autofixRerun?.rerunStatus === "passed";
+  const effectiveCurrentRunPhase =
+    isE2E && e2eCurrentRun ? e2eCurrentRun : currentRun?.phase;
+  const effectiveVerifiedForContinue =
+    isE2E && (e2eRerun === "passed" || e2eRerun === "failed")
+      ? e2eRerun === "passed"
+      : autofixRerun?.rerunStatus === "passed";
+
   const runLocked =
     !!currentRun &&
     currentRun.phase !== "paused" &&
@@ -296,7 +399,7 @@ export default function App() {
 
   async function refreshSecrets() {
     try {
-      const names = await invoke<string[]>("list_secrets");
+      const names = await invokeCommand<string[]>("list_secrets");
       setSecretNames(Array.isArray(names) ? names : []);
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] list_secrets failed: ${String(e)}`]);
@@ -306,7 +409,7 @@ export default function App() {
   async function refreshPreflight() {
     try {
       setPreflightBusy(true);
-      const cfg = await invoke<PreflightConfig>("get_preflight_config", { project });
+      const cfg = await invokeCommand<PreflightConfig>("get_preflight_config", { project });
       const nextCfg = cfg ?? null;
       setPreflightConfig(nextCfg);
 
@@ -345,7 +448,7 @@ export default function App() {
   async function refreshRunHistory() {
     try {
       setRunHistoryBusy(true);
-      const raw = await invoke<string>("read_run_history", { project });
+      const raw = await invokeCommand<string>("read_run_history", { project });
       const entries = String(raw)
         .split("\n")
         .map((line) => line.trim())
@@ -373,7 +476,7 @@ export default function App() {
   async function refreshCurrentRun() {
     try {
       setCurrentRunBusy(true);
-      const raw = await invoke<string>("read_run_json_project", { project });
+      const raw = await invokeCommand<string>("read_run_json_project", { project });
       const parsed = parseJsonSafe<CurrentRunState>(String(raw));
       setCurrentRun(parsed);
     } catch {
@@ -403,7 +506,7 @@ export default function App() {
 
       const entries = await Promise.all(
         artifactNames.map(async (name) => {
-          const raw = await invoke<string>("read_file_if_exists", {
+          const raw = await invokeCommand<string>("read_file_if_exists", {
             project,
             relativePath: `.builder/${name}`,
           }).catch(() => "");
@@ -443,7 +546,7 @@ export default function App() {
   async function onSetApprovalStatus(nextStatus: "approved" | "rejected") {
     try {
       setApprovalBusy(true);
-      await invoke("set_autofix_approval_status", {
+      await invokeCommand("set_autofix_approval_status", {
         project,
         status: nextStatus,
       });
@@ -459,7 +562,7 @@ export default function App() {
   async function onEvaluateExecution() {
     try {
       setApprovalBusy(true);
-      await invoke("evaluate_autofix_execution", { project });
+      await invokeCommand("evaluate_autofix_execution", { project });
       setLogs((prev) => [...prev, "[ui] execution gate evaluated"]);
       await refreshAutofixState();
     } catch (e) {
@@ -472,7 +575,7 @@ export default function App() {
   async function onExecuteApprovedPatch() {
     try {
       setApprovalBusy(true);
-      await invoke("execute_autofix_patch", { project });
+      await invokeCommand("execute_autofix_patch", { project });
       setLogs((prev) => [...prev, "[ui] controlled patch execution completed"]);
       await refreshAutofixState();
     } catch (e) {
@@ -485,7 +588,7 @@ export default function App() {
   async function onRerunAfterPatch() {
     try {
       setApprovalBusy(true);
-      await invoke("rerun_after_patch", { project });
+      await invokeCommand("rerun_after_patch", { project });
       setLogs((prev) => [...prev, "[ui] rerun after patch completed"]);
       await refreshAutofixState();
     } catch (e) {
@@ -518,7 +621,7 @@ export default function App() {
         },
       };
 
-      await invoke("set_preflight_config", {
+      await invokeCommand("set_preflight_config", {
         project,
         config: nextConfig,
       });
@@ -542,7 +645,7 @@ export default function App() {
 
     try {
       setSecretBusy(true);
-      await invoke("set_secret", {
+      await invokeCommand("set_secret", {
         name: requiredSecretName,
         value,
       });
@@ -645,7 +748,7 @@ export default function App() {
     const raw = prompt.replace(/\r\n/g, "\n");
 
     try {
-      await invoke("run_agent", {
+      await invokeCommand("run_agent", {
         project,
         provider,
         mode: runMode,
@@ -690,7 +793,7 @@ export default function App() {
     if (running || runLocked) return;
     try {
       setPausedAt("");
-      await invoke("continue_agent", {
+      await invokeCommand("continue_agent", {
         app: undefined,
         project,
         prompt,
@@ -1161,6 +1264,9 @@ export default function App() {
               <div style={{ fontSize: 12, color: "#aaa" }}>
                 rerunReason: {autofixRerun?.reason ?? "-"}
               </div>
+              <div style={{ fontSize: 12, color: effectiveVerifiedForContinue ? "#9ee37d" : "#ffb86b" }}>
+                verifiedForContinue: {effectiveVerifiedForContinue ? "yes" : "no"}
+              </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
@@ -1530,17 +1636,17 @@ export default function App() {
             {running ? "Running…" : "Run"}
           </button>
 
-          {currentRun?.phase === "paused" && (
+          {effectiveCurrentRunPhase === "paused" && (
             <button
               onClick={onApproveContinue}
-              disabled={running || runLocked}
+              disabled={running || runLocked || !effectiveVerifiedForContinue}
               style={{
                 padding: "10px 14px",
                 borderRadius: 10,
                 border: "1px solid #333",
-                background: running || runLocked ? "#3a4a33" : "#9ee37d",
-                color: running || runLocked ? "#9aa58f" : "#000",
-                cursor: running || runLocked ? "not-allowed" : "pointer",
+                background: running || runLocked || !effectiveVerifiedForContinue ? "#3a4a33" : "#9ee37d",
+                color: running || runLocked || !effectiveVerifiedForContinue ? "#9aa58f" : "#000",
+                cursor: running || runLocked || !effectiveVerifiedForContinue ? "not-allowed" : "pointer",
                 fontWeight: 700,
               }}
             >
