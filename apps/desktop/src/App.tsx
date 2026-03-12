@@ -1670,7 +1670,7 @@ export default function App() {
             {running ? "Running…" : "Run"}
           </button>
 
-          {effectiveCurrentRunPhase === "paused" && (
+          {(effectiveCurrentRunPhase === "paused" || currentRun?.status === "success") && (
             <>
               <button
                 onClick={onEvaluateContinue}

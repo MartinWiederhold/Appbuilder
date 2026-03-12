@@ -112,6 +112,55 @@ fn rehydrate_paused_run_for_continue(project: &str) -> Result<(), String> {
 
 
 
+
+fn resolve_artifact_write_path(project: &str, file_name: &str) -> Result<std::path::PathBuf, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let project_dir = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project);
+
+  let builder_dir = project_dir.join(".builder");
+  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+  let target = builder_dir.join(file_name);
+  if !target.exists() {
+    return Ok(target);
+  }
+
+  let run_path = project_dir.join("run.json");
+  if !run_path.exists() {
+    return Ok(target);
+  }
+
+  let raw = std::fs::read_to_string(&run_path).map_err(|e| format!("Failed to read run.json: {}", e))?;
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
+
+  let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("");
+  if status != "success" {
+    return Ok(target);
+  }
+
+  let frozen_name = if let Some(stripped) = file_name.strip_suffix(".json") {
+    format!("{}.frozen.json", stripped)
+  } else {
+    format!("{}.frozen", file_name)
+  };
+
+  Ok(builder_dir.join(frozen_name))
+}
+
+fn write_json_artifact(project: &str, file_name: &str, payload: &serde_json::Value) -> Result<String, String> {
+  let path = resolve_artifact_write_path(project, file_name)?;
+  let body = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
+  std::fs::write(&path, body).map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+  Ok(path.display().to_string())
+}
+
+
 fn write_continue_decision_artifact(
   project: &str,
   continue_status: &str,
@@ -120,15 +169,6 @@ fn write_continue_decision_artifact(
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root".to_string())?;
 
-  let builder_dir = repo_root
-    .join("workspace")
-    .join("projects")
-    .join(project)
-    .join(".builder");
-
-  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
-
-  let artifact_path = builder_dir.join("autofix.continue.json");
   let payload = serde_json::json!({
     "project": project,
     "continueStatus": continue_status,
@@ -137,9 +177,7 @@ fn write_continue_decision_artifact(
     "sourceArtifact": "autofix.rerun.json"
   });
 
-  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-  std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
-  Ok(artifact_path.display().to_string())
+  write_json_artifact(project, "autofix.continue.json", &payload)
 }
 
 
@@ -683,7 +721,6 @@ fn rerun_after_patch(project: String) -> Result<String, String> {
     "Post-patch verification failed for flutter test."
   };
 
-  let artifact_path = builder_dir.join("autofix.rerun.json");
   let payload = serde_json::json!({
     "createdAt": now_ts(),
     "project": project,
@@ -696,9 +733,7 @@ fn rerun_after_patch(project: String) -> Result<String, String> {
     "sourceArtifact": "autofix.execution.result.json"
   });
 
-  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-  std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
-  Ok(artifact_path.display().to_string())
+  write_json_artifact(&project, "autofix.rerun.json", &payload)
 }
 
 
