@@ -13,7 +13,7 @@ async function readJsonFileIfExists(path: string) {
 
 async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isE2E) {
-    return await invokeCommand<T>(cmd, args);
+    return await invoke<T>(cmd, args);
   }
 
   const project = String(args?.project ?? "todo_flutter");
@@ -124,6 +124,15 @@ type AutofixSelfHealState = {
 
 
 
+
+
+type AutofixContinueState = {
+  project?: string;
+  continueStatus?: string;
+  reason?: string;
+  createdAt?: string | number;
+  sourceArtifact?: string;
+};
 
 type AutofixRerunState = {
   createdAt?: string | number;
@@ -325,6 +334,7 @@ export default function App() {
   const [autofixExecution, setAutofixExecution] = useState<AutofixExecutionState | null>(null);
   const [autofixExecutionResult, setAutofixExecutionResult] = useState<AutofixExecutionResultState | null>(null);
   const [autofixRerun, setAutofixRerun] = useState<AutofixRerunState | null>(null);
+  const [autofixContinue, setAutofixContinue] = useState<AutofixContinueState | null>(null);
   const [artifactMap, setArtifactMap] = useState<Record<string, string>>({});
   const [selectedArtifact, setSelectedArtifact] = useState<string>("autofix.retry.run.json");
 
@@ -502,6 +512,7 @@ export default function App() {
         "autofix.execution.json",
         "autofix.execution.result.json",
         "autofix.rerun.json",
+        "autofix.continue.json",
       ];
 
       const entries = await Promise.all(
@@ -523,6 +534,7 @@ export default function App() {
       const executionRaw = nextMap["autofix.execution.json"] ?? "";
       const executionResultRaw = nextMap["autofix.execution.result.json"] ?? "";
       const rerunRaw = nextMap["autofix.rerun.json"] ?? "";
+      const continueRaw = nextMap["autofix.continue.json"] ?? "";
 
       setAutofixSelfHeal(selfHealRaw ? parseJsonSafe<AutofixSelfHealState>(selfHealRaw) : null);
       setAutofixRetryRun(retryRunRaw ? parseJsonSafe<AutofixRetryRunState>(retryRunRaw) : null);
@@ -530,6 +542,7 @@ export default function App() {
       setAutofixExecution(executionRaw ? parseJsonSafe<AutofixExecutionState>(executionRaw) : null);
       setAutofixExecutionResult(executionResultRaw ? parseJsonSafe<AutofixExecutionResultState>(executionResultRaw) : null);
       setAutofixRerun(rerunRaw ? parseJsonSafe<AutofixRerunState>(rerunRaw) : null);
+      setAutofixContinue(continueRaw ? parseJsonSafe<AutofixContinueState>(continueRaw) : null);
     } catch {
       setAutofixSelfHeal(null);
       setAutofixRetryRun(null);
@@ -537,6 +550,7 @@ export default function App() {
       setAutofixExecution(null);
       setAutofixExecutionResult(null);
       setAutofixRerun(null);
+      setAutofixContinue(null);
       setArtifactMap({});
     } finally {
       setAutofixBusy(false);
@@ -787,6 +801,19 @@ export default function App() {
 
     setPausedAt("");
     await startRun(mode, stopAfter);
+  }
+
+  async function onEvaluateContinue() {
+    try {
+      setApprovalBusy(true);
+      await invokeCommand("evaluate_continue", { project });
+      setLogs((prev) => [...prev, "[ui] evaluate_continue completed"]);
+      await refreshAutofixState();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] evaluate_continue failed: ${String(e)}`]);
+    } finally {
+      setApprovalBusy(false);
+    }
   }
 
   async function onApproveContinue() {
@@ -1267,6 +1294,12 @@ export default function App() {
               <div style={{ fontSize: 12, color: effectiveVerifiedForContinue ? "#9ee37d" : "#ffb86b" }}>
                 verifiedForContinue: {effectiveVerifiedForContinue ? "yes" : "no"}
               </div>
+              <div style={{ fontSize: 12, color: "#fff" }}>
+                continueGate: {autofixContinue?.continueStatus ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                continueReason: {autofixContinue?.reason ?? "-"}
+              </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
@@ -1378,6 +1411,7 @@ export default function App() {
                 "autofix.execution.json",
                 "autofix.execution.result.json",
                 "autofix.rerun.json",
+                "autofix.continue.json",
               ].map((name) => {
                 const hasData = !!artifactMap[name];
                 const selected = selectedArtifact === name;
@@ -1637,21 +1671,39 @@ export default function App() {
           </button>
 
           {effectiveCurrentRunPhase === "paused" && (
-            <button
-              onClick={onApproveContinue}
-              disabled={running || runLocked || !effectiveVerifiedForContinue}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid #333",
-                background: running || runLocked || !effectiveVerifiedForContinue ? "#3a4a33" : "#9ee37d",
-                color: running || runLocked || !effectiveVerifiedForContinue ? "#9aa58f" : "#000",
-                cursor: running || runLocked || !effectiveVerifiedForContinue ? "not-allowed" : "pointer",
-                fontWeight: 700,
-              }}
-            >
-              Approve & Continue
-            </button>
+            <>
+              <button
+                onClick={onEvaluateContinue}
+                disabled={approvalBusy}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #333",
+                  background: approvalBusy ? "#222" : "#1a1a1a",
+                  color: approvalBusy ? "#888" : "#fff",
+                  cursor: approvalBusy ? "not-allowed" : "pointer",
+                  fontWeight: 700,
+                }}
+              >
+                Evaluate Continue
+              </button>
+
+              <button
+                onClick={onApproveContinue}
+                disabled={running || runLocked || !effectiveVerifiedForContinue}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #333",
+                  background: running || runLocked || !effectiveVerifiedForContinue ? "#3a4a33" : "#9ee37d",
+                  color: running || runLocked || !effectiveVerifiedForContinue ? "#9aa58f" : "#000",
+                  cursor: running || runLocked || !effectiveVerifiedForContinue ? "not-allowed" : "pointer",
+                  fontWeight: 700,
+                }}
+              >
+                Approve & Continue
+              </button>
+            </>
           )}
 
           <div style={{ color: "#aaa", fontSize: 13 }}>

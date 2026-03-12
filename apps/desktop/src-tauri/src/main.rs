@@ -49,6 +49,38 @@ fn rehydrate_paused_run_for_continue(project: &str) -> Result<(), String> {
 }
 
 
+
+fn write_continue_decision_artifact(
+  project: &str,
+  continue_status: &str,
+  reason: &str,
+) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let builder_dir = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project)
+    .join(".builder");
+
+  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+  let artifact_path = builder_dir.join("autofix.continue.json");
+  let payload = serde_json::json!({
+    "project": project,
+    "continueStatus": continue_status,
+    "reason": reason,
+    "createdAt": now_ts(),
+    "sourceArtifact": "autofix.rerun.json"
+  });
+
+  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+  std::fs::write(&artifact_path, body).map_err(|e| e.to_string())?;
+  Ok(artifact_path.display().to_string())
+}
+
+
 fn ensure_verified_rerun(project: &str) -> Result<(), String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root".to_string())?;
@@ -1533,8 +1565,71 @@ Mode: proposal_only",
 
 
 #[tauri::command]
+fn evaluate_continue(project: String) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let rerun_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join(".builder")
+    .join("autofix.rerun.json");
+
+  if !rerun_path.exists() {
+    return write_continue_decision_artifact(
+      &project,
+      "blocked",
+      "Continue blocked because autofix.rerun.json does not exist.",
+    );
+  }
+
+  let raw = std::fs::read_to_string(&rerun_path)
+    .map_err(|e| format!("Failed to read autofix.rerun.json: {}", e))?;
+
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid autofix.rerun.json: {}", e))?;
+
+  let rerun_status = parsed.get("rerunStatus")
+    .and_then(|v| v.as_str())
+    .unwrap_or("");
+
+  if rerun_status == "passed" {
+    write_continue_decision_artifact(
+      &project,
+      "allowed",
+      "Continue allowed because autofix.rerun.json has rerunStatus=passed.",
+    )
+  } else {
+    write_continue_decision_artifact(
+      &project,
+      "blocked",
+      &format!("Continue blocked because autofix.rerun.json has rerunStatus={}.", rerun_status),
+    )
+  }
+}
+
+
+#[tauri::command]
 fn continue_agent(app: AppHandle, project: String, prompt: String, provider: String) -> Result<(), String> {
-    ensure_verified_rerun(&project)?;
+    match ensure_verified_rerun(&project) {
+        Ok(_) => {
+            let _ = write_continue_decision_artifact(
+                &project,
+                "started",
+                "Continue allowed because autofix.rerun.json has rerunStatus=passed.",
+            );
+        }
+        Err(e) => {
+            let _ = write_continue_decision_artifact(
+                &project,
+                "blocked",
+                &format!("Continue blocked: {}", e),
+            );
+            return Err(e);
+        }
+    }
+
     rehydrate_paused_run_for_continue(&project)?;
     run_agent(app, project, prompt, provider, "full".to_string(), "none".to_string())
 }
@@ -2207,6 +2302,7 @@ fn main() {
         read_run_json_project,
         get_preflight_config,
         set_preflight_config,
+        evaluate_continue,
         continue_agent,
         run_agent,
         read_run_history
