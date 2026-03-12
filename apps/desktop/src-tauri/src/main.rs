@@ -11,6 +11,44 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+
+fn rehydrate_paused_run_for_continue(project: &str) -> Result<(), String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root".to_string())?;
+
+  let run_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(project)
+    .join("run.json");
+
+  if !run_path.exists() {
+    return Ok(());
+  }
+
+  let raw = std::fs::read_to_string(&run_path)
+    .map_err(|e| format!("Failed to read run.json: {}", e))?;
+
+  let mut parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
+
+  if !parsed.is_object() {
+    return Err("run.json is not a JSON object".to_string());
+  }
+
+  parsed["status"] = serde_json::json!("running");
+  parsed["phase"] = serde_json::json!("generate");
+  parsed["step"] = serde_json::Value::Null;
+  parsed["finishedAt"] = serde_json::Value::Null;
+  parsed["updatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+
+  let body = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+  std::fs::write(&run_path, body).map_err(|e| format!("Failed to write run.json: {}", e))?;
+
+  Ok(())
+}
+
+
 fn ensure_verified_rerun(project: &str) -> Result<(), String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root".to_string())?;
@@ -1497,6 +1535,7 @@ Mode: proposal_only",
 #[tauri::command]
 fn continue_agent(app: AppHandle, project: String, prompt: String, provider: String) -> Result<(), String> {
     ensure_verified_rerun(&project)?;
+    rehydrate_paused_run_for_continue(&project)?;
     run_agent(app, project, prompt, provider, "full".to_string(), "none".to_string())
 }
 

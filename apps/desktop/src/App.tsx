@@ -283,6 +283,7 @@ export default function App() {
   const runPossiblyActive = isRunPossiblyActive(currentRun);
   const runLocked =
     !!currentRun &&
+    currentRun.phase !== "paused" &&
     (
       currentRun.status === "running" ||
       (
@@ -1529,7 +1530,7 @@ export default function App() {
             {running ? "Running…" : "Run"}
           </button>
 
-          {phase === "paused" && (
+          {currentRun?.phase === "paused" && (
             <button
               onClick={onApproveContinue}
               disabled={running || runLocked}
