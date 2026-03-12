@@ -476,6 +476,54 @@ fn read_run_history(project: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn evaluate_autofix_execution(project: String) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  let builder_dir = project_dir.join(".builder");
+  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+  let approval_path = builder_dir.join("autofix.approval.json");
+  let approval = std::fs::read_to_string(&approval_path)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    .unwrap_or_else(|| serde_json::json!({}));
+
+  let safe_mode = approval.get("safeMode").and_then(|v| v.as_bool()).unwrap_or(true);
+  let approval_status = approval.get("approvalStatus").and_then(|v| v.as_str()).unwrap_or("pending");
+  let requires_human_approval = approval.get("requiresHumanApproval").and_then(|v| v.as_bool()).unwrap_or(true);
+  let source_artifact = approval.get("sourceArtifact").cloned().unwrap_or_else(|| serde_json::json!("autofix.patch.json"));
+
+  let (execution_status, reason) = if safe_mode && requires_human_approval {
+    match approval_status {
+      "approved" => ("allowed", "Patch execution is allowed because approvalStatus=approved."),
+      "rejected" => ("blocked", "Patch execution is blocked because approvalStatus=rejected."),
+      _ => ("blocked", "Patch execution is blocked because approvalStatus is not approved yet."),
+    }
+  } else {
+    ("allowed", "Patch execution is allowed because Safe Mode is inactive.")
+  };
+
+  let execution_path = builder_dir.join("autofix.execution.json");
+  let payload = serde_json::json!({
+    "safeMode": safe_mode,
+    "approvalStatus": approval_status,
+    "requiresHumanApproval": requires_human_approval,
+    "executionStatus": execution_status,
+    "project": project,
+    "sourceArtifact": source_artifact,
+    "createdAt": now_ts(),
+    "reason": reason
+  });
+
+  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+  std::fs::write(&execution_path, body).map_err(|e| e.to_string())?;
+  Ok(execution_path.display().to_string())
+}
+
+
+#[tauri::command]
 fn set_autofix_approval_status(
   project: String,
   status: String,
@@ -1939,6 +1987,7 @@ fn main() {
         set_secret,
         start_live_flutter,
         reveal_project,
+        evaluate_autofix_execution,
         set_autofix_approval_status,
         read_file_if_exists,
         read_run_json_project,
