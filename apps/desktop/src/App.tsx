@@ -68,6 +68,16 @@ type AutofixSelfHealState = {
 
 
 
+
+type AutofixExecutionResultState = {
+  executionResultStatus?: string;
+  createdAt?: string | number;
+  project?: string;
+  touchedFiles?: string[];
+  reason?: string;
+  sourceArtifact?: string;
+};
+
 type AutofixExecutionState = {
   safeMode?: boolean;
   approvalStatus?: string;
@@ -245,6 +255,7 @@ export default function App() {
   const [autofixApproval, setAutofixApproval] = useState<AutofixApprovalState | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [autofixExecution, setAutofixExecution] = useState<AutofixExecutionState | null>(null);
+  const [autofixExecutionResult, setAutofixExecutionResult] = useState<AutofixExecutionResultState | null>(null);
   const [artifactMap, setArtifactMap] = useState<Record<string, string>>({});
   const [selectedArtifact, setSelectedArtifact] = useState<string>("autofix.retry.run.json");
 
@@ -371,6 +382,7 @@ export default function App() {
         "autofix.selfheal.json",
         "autofix.approval.json",
         "autofix.execution.json",
+        "autofix.execution.result.json",
       ];
 
       const entries = await Promise.all(
@@ -390,16 +402,19 @@ export default function App() {
       const retryRunRaw = nextMap["autofix.retry.run.json"] ?? "";
       const approvalRaw = nextMap["autofix.approval.json"] ?? "";
       const executionRaw = nextMap["autofix.execution.json"] ?? "";
+      const executionResultRaw = nextMap["autofix.execution.result.json"] ?? "";
 
       setAutofixSelfHeal(selfHealRaw ? parseJsonSafe<AutofixSelfHealState>(selfHealRaw) : null);
       setAutofixRetryRun(retryRunRaw ? parseJsonSafe<AutofixRetryRunState>(retryRunRaw) : null);
       setAutofixApproval(approvalRaw ? parseJsonSafe<AutofixApprovalState>(approvalRaw) : null);
       setAutofixExecution(executionRaw ? parseJsonSafe<AutofixExecutionState>(executionRaw) : null);
+      setAutofixExecutionResult(executionResultRaw ? parseJsonSafe<AutofixExecutionResultState>(executionResultRaw) : null);
     } catch {
       setAutofixSelfHeal(null);
       setAutofixRetryRun(null);
       setAutofixApproval(null);
       setAutofixExecution(null);
+      setAutofixExecutionResult(null);
       setArtifactMap({});
     } finally {
       setAutofixBusy(false);
@@ -430,6 +445,19 @@ export default function App() {
       await refreshAutofixState();
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] execution gate evaluation failed: ${String(e)}`]);
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
+  async function onExecuteApprovedPatch() {
+    try {
+      setApprovalBusy(true);
+      await invoke("execute_autofix_patch", { project });
+      setLogs((prev) => [...prev, "[ui] controlled patch execution completed"]);
+      await refreshAutofixState();
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] controlled patch execution failed: ${String(e)}`]);
     } finally {
       setApprovalBusy(false);
     }
@@ -1069,6 +1097,15 @@ export default function App() {
               <div style={{ fontSize: 12, color: "#aaa" }}>
                 executionReason: {autofixExecution?.reason ?? "-"}
               </div>
+              <div style={{ fontSize: 12, color: "#fff" }}>
+                executionResult: {autofixExecutionResult?.executionResultStatus ?? "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                touchedFiles: {(autofixExecutionResult?.touchedFiles ?? []).length > 0 ? (autofixExecutionResult?.touchedFiles ?? []).join(", ") : "-"}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                executionResultReason: {autofixExecutionResult?.reason ?? "-"}
+              </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
@@ -1118,6 +1155,22 @@ export default function App() {
                 >
                   Evaluate Execution
                 </button>
+
+                <button
+                  onClick={onExecuteApprovedPatch}
+                  disabled={approvalBusy || autofixExecution?.executionStatus !== "allowed"}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: approvalBusy || autofixExecution?.executionStatus !== "allowed" ? "#222" : "#fff",
+                    color: approvalBusy || autofixExecution?.executionStatus !== "allowed" ? "#888" : "#000",
+                    cursor: approvalBusy || autofixExecution?.executionStatus !== "allowed" ? "not-allowed" : "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  Execute Approved Patch
+                </button>
               </div>
             </div>
           )}
@@ -1146,6 +1199,7 @@ export default function App() {
                 "autofix.selfheal.json",
                 "autofix.approval.json",
                 "autofix.execution.json",
+                "autofix.execution.result.json",
               ].map((name) => {
                 const hasData = !!artifactMap[name];
                 const selected = selectedArtifact === name;

@@ -476,6 +476,78 @@ fn read_run_history(project: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn execute_autofix_patch(project: String) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let project_dir = repo_root.join("workspace").join("projects").join(&project);
+  let builder_dir = project_dir.join(".builder");
+  std::fs::create_dir_all(&builder_dir).map_err(|e| e.to_string())?;
+
+  let execution_path = builder_dir.join("autofix.execution.json");
+  let execution = std::fs::read_to_string(&execution_path)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    .unwrap_or_else(|| serde_json::json!({}));
+
+  let execution_status = execution.get("executionStatus").and_then(|v| v.as_str()).unwrap_or("blocked");
+  let approval_status = execution.get("approvalStatus").and_then(|v| v.as_str()).unwrap_or("pending");
+
+  let result_path = builder_dir.join("autofix.execution.result.json");
+
+  if execution_status != "allowed" || approval_status != "approved" {
+    let payload = serde_json::json!({
+      "executionResultStatus": "blocked",
+      "createdAt": now_ts(),
+      "project": project,
+      "reason": format!(
+        "Patch execution blocked because executionStatus={} and approvalStatus={}",
+        execution_status, approval_status
+      )
+    });
+    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&result_path, body).map_err(|e| e.to_string())?;
+    return Ok(result_path.display().to_string());
+  }
+
+  let main_dart = project_dir.join("lib").join("main.dart");
+  let source = std::fs::read_to_string(&main_dart).map_err(|e| format!("{}: {}", main_dart.display(), e))?;
+
+  let needle = "this_is_invalid_dart;";
+  let mut touched_files: Vec<String> = Vec::new();
+  let (next_source, status, reason) = if source.contains(needle) {
+    touched_files.push("lib/main.dart".to_string());
+    (
+      source.replace(needle, "// removed by controlled patch execution"),
+      "executed",
+      "Known MVP patch executed: removed synthetic invalid Dart token."
+    )
+  } else {
+    (
+      source,
+      "noop",
+      "No known MVP patch target found; nothing changed."
+    )
+  };
+
+  std::fs::write(&main_dart, next_source).map_err(|e| format!("{}: {}", main_dart.display(), e))?;
+
+  let payload = serde_json::json!({
+    "executionResultStatus": status,
+    "createdAt": now_ts(),
+    "project": project,
+    "touchedFiles": touched_files,
+    "reason": reason,
+    "sourceArtifact": "autofix.execution.json"
+  });
+
+  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+  std::fs::write(&result_path, body).map_err(|e| e.to_string())?;
+  Ok(result_path.display().to_string())
+}
+
+
+#[tauri::command]
 fn evaluate_autofix_execution(project: String) -> Result<String, String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
@@ -1987,6 +2059,7 @@ fn main() {
         set_secret,
         start_live_flutter,
         reveal_project,
+        execute_autofix_patch,
         evaluate_autofix_execution,
         set_autofix_approval_status,
         read_file_if_exists,
