@@ -540,9 +540,20 @@ export default function App() {
   async function refreshRunHistoryArtifacts() {
     try {
       const items = await invokeCommand<string[]>("list_run_history_artifacts", { project });
-      setRunHistoryArtifacts(Array.isArray(items) ? items : []);
+      const nextItems = Array.isArray(items) ? items : [];
+      setRunHistoryArtifacts(nextItems);
+
+      if (nextItems.length > 0) {
+        const firstItem = nextItems[0];
+        await openRunHistoryArtifact(firstItem);
+      } else {
+        setSelectedRunHistoryArtifact(null);
+        setRunHistoryArtifactContent("");
+      }
     } catch (e) {
       setLogs((prev) => [...prev, `[ui] list_run_history_artifacts failed: ${String(e)}`]);
+      setSelectedRunHistoryArtifact(null);
+      setRunHistoryArtifactContent("");
     }
   }
 
