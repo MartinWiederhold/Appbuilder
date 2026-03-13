@@ -983,6 +983,117 @@ fn read_file_if_exists(project: String, relativePath: String) -> Result<String, 
 
 
 #[tauri::command]
+fn read_run_history_artifact(project: String, file_name: String) -> Result<String, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let run_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join("run.json");
+
+  if !run_path.exists() {
+    return Ok(String::new());
+  }
+
+  let raw = std::fs::read_to_string(&run_path)
+    .map_err(|e| format!("Failed to read run.json: {}", e))?;
+
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
+
+  let run_id = parsed
+    .get("runId")
+    .and_then(|v| v.as_str())
+    .unwrap_or("")
+    .trim()
+    .to_string();
+
+  if run_id.is_empty() {
+    return Ok(String::new());
+  }
+
+  let path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join(".builder")
+    .join("history")
+    .join(&run_id)
+    .join(&file_name);
+
+  if !path.exists() {
+    return Ok(String::new());
+  }
+
+  std::fs::read_to_string(&path).map_err(|e| format!("Failed to read history artifact {}: {}", path.display(), e))
+}
+
+
+#[tauri::command]
+fn list_run_history_artifacts(project: String) -> Result<Vec<String>, String> {
+  let repo_root = find_repo_root()
+    .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
+
+  let run_path = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join("run.json");
+
+  if !run_path.exists() {
+    return Ok(vec![]);
+  }
+
+  let raw = std::fs::read_to_string(&run_path)
+    .map_err(|e| format!("Failed to read run.json: {}", e))?;
+
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).map_err(|e| format!("Invalid run.json: {}", e))?;
+
+  let run_id = parsed
+    .get("runId")
+    .and_then(|v| v.as_str())
+    .unwrap_or("")
+    .trim()
+    .to_string();
+
+  if run_id.is_empty() {
+    return Ok(vec![]);
+  }
+
+  let history_dir = repo_root
+    .join("workspace")
+    .join("projects")
+    .join(&project)
+    .join(".builder")
+    .join("history")
+    .join(&run_id);
+
+  if !history_dir.exists() {
+    return Ok(vec![]);
+  }
+
+  let mut items: Vec<String> = std::fs::read_dir(&history_dir)
+    .map_err(|e| format!("Failed to read history dir: {}", e))?
+    .filter_map(|entry| entry.ok())
+    .filter_map(|entry| {
+      let path = entry.path();
+      if path.is_file() {
+        path.file_name().map(|n| n.to_string_lossy().to_string())
+      } else {
+        None
+      }
+    })
+    .collect();
+
+  items.sort();
+  Ok(items)
+}
+
+
+#[tauri::command]
 fn read_run_json_project(project: String) -> Result<String, String> {
   let repo_root = find_repo_root()
     .ok_or_else(|| "Could not locate repo root (workspace/projects not found)".to_string())?;
@@ -2454,6 +2565,8 @@ fn main() {
         evaluate_autofix_execution,
         set_autofix_approval_status,
         read_file_if_exists,
+        read_run_history_artifact,
+        list_run_history_artifacts,
         read_run_json_project,
         get_preflight_config,
         set_preflight_config,

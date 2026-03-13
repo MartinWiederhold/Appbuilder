@@ -326,6 +326,9 @@ export default function App() {
 
   const [currentRun, setCurrentRun] = useState<CurrentRunState | null>(null);
   const [currentRunBusy, setCurrentRunBusy] = useState(false);
+  const [runHistoryArtifacts, setRunHistoryArtifacts] = useState<string[]>([]);
+  const [selectedRunHistoryArtifact, setSelectedRunHistoryArtifact] = useState<string>("");
+  const [runHistoryArtifactContent, setRunHistoryArtifactContent] = useState<string>("");
   const [autofixSelfHeal, setAutofixSelfHeal] = useState<AutofixSelfHealState | null>(null);
   const [autofixRetryRun, setAutofixRetryRun] = useState<AutofixRetryRunState | null>(null);
   const [autofixBusy, setAutofixBusy] = useState(false);
@@ -493,6 +496,29 @@ export default function App() {
       setCurrentRun(null);
     } finally {
       setCurrentRunBusy(false);
+    }
+  }
+
+  async function openRunHistoryArtifact(fileName: string) {
+    try {
+      setSelectedRunHistoryArtifact(fileName);
+      const content = await invokeCommand<string>("read_run_history_artifact", {
+        project,
+        fileName,
+      });
+      setRunHistoryArtifactContent(content || "");
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] read_run_history_artifact failed: ${String(e)}`]);
+      setRunHistoryArtifactContent("");
+    }
+  }
+
+  async function refreshRunHistoryArtifacts() {
+    try {
+      const items = await invokeCommand<string[]>("list_run_history_artifacts", { project });
+      setRunHistoryArtifacts(Array.isArray(items) ? items : []);
+    } catch (e) {
+      setLogs((prev) => [...prev, `[ui] list_run_history_artifacts failed: ${String(e)}`]);
     }
   }
 
@@ -1510,6 +1536,22 @@ export default function App() {
             </>
           )}
 
+
+          <button
+            onClick={refreshRunHistoryArtifacts}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "#1a1a1a",
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Refresh Run Artifacts
+          </button>
+
           <button
             onClick={refreshCurrentRun}
             disabled={currentRunBusy}
@@ -1526,6 +1568,76 @@ export default function App() {
           >
             Refresh Current Run
           </button>
+        </div>
+
+
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #333",
+            background: "#111",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>
+            Run-bound Artifact History
+          </div>
+
+          {!currentRun?.runId ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>No current runId</div>
+          ) : runHistoryArtifacts.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#aaa" }}>No history artifacts for current run</div>
+          ) : (
+            <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                runId: {currentRun.runId}
+              </div>
+              {runHistoryArtifacts.map((item) => {
+                const selected = selectedRunHistoryArtifact === item;
+                return (
+                  <button
+                    key={item}
+                    onClick={() => openRunHistoryArtifact(item)}
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: selected ? "1px solid #fff" : "1px solid #333",
+                      background: selected ? "#fff" : "#0d0d0d",
+                      color: selected ? "#000" : "#fff",
+                      fontSize: 12,
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      textAlign: "left",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {item}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <textarea
+            readOnly
+            value={runHistoryArtifactContent}
+            placeholder="No run-bound artifact content selected"
+            style={{
+              width: "100%",
+              minHeight: 180,
+              padding: 12,
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "#0d0d0d",
+              color: "#ddd",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+              lineHeight: 1.45,
+              resize: "vertical",
+            }}
+          />
         </div>
 
         <div
