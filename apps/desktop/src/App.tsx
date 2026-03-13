@@ -381,6 +381,30 @@ export default function App() {
     }
   }, [project, e2eCurrentRun, e2eRerun]);
 
+
+  const groupedRunHistoryArtifacts = useMemo(() => {
+    const groups: Array<{ title: string; items: string[] }> = [];
+
+    const continueItems = runHistoryArtifacts.filter((item) => item.includes("continue"));
+    const executionItems = runHistoryArtifacts.filter(
+      (item) => item.includes("execution") && !item.includes("continue")
+    );
+    const rerunItems = runHistoryArtifacts.filter((item) => item.includes("rerun"));
+    const otherItems = runHistoryArtifacts.filter(
+      (item) =>
+        !continueItems.includes(item) &&
+        !executionItems.includes(item) &&
+        !rerunItems.includes(item)
+    );
+
+    if (continueItems.length) groups.push({ title: "Continue", items: continueItems });
+    if (executionItems.length) groups.push({ title: "Execution", items: executionItems });
+    if (rerunItems.length) groups.push({ title: "Rerun", items: rerunItems });
+    if (otherItems.length) groups.push({ title: "Other", items: otherItems });
+
+    return groups;
+  }, [runHistoryArtifacts]);
+
   const logText = useMemo(() => logs.join("\n"), [logs]);
 
   const requiredSecretName =
@@ -1595,28 +1619,35 @@ export default function App() {
               <div style={{ fontSize: 12, color: "#aaa" }}>
                 runId: {currentRun.runId}
               </div>
-              {runHistoryArtifacts.map((item) => {
-                const selected = selectedRunHistoryArtifact === item;
-                return (
-                  <button
-                    key={item}
-                    onClick={() => openRunHistoryArtifact(item)}
-                    style={{
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: selected ? "1px solid #fff" : "1px solid #333",
-                      background: selected ? "#fff" : "#0d0d0d",
-                      color: selected ? "#000" : "#fff",
-                      fontSize: 12,
-                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      textAlign: "left",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {item}
-                  </button>
-                );
-              })}
+              {groupedRunHistoryArtifacts.map((group) => (
+                <div key={group.title} style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: "#aaa", fontWeight: 700 }}>
+                    {group.title}
+                  </div>
+                  {group.items.map((item) => {
+                    const selected = selectedRunHistoryArtifact === item;
+                    return (
+                      <button
+                        key={item}
+                        onClick={() => openRunHistoryArtifact(item)}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: selected ? "1px solid #fff" : "1px solid #333",
+                          background: selected ? "#fff" : "#0d0d0d",
+                          color: selected ? "#000" : "#fff",
+                          fontSize: 12,
+                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                          textAlign: "left",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {item}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           )}
 
