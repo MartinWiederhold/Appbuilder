@@ -825,9 +825,7 @@ fn execute_autofix_patch(project: String) -> Result<String, String> {
         execution_status, approval_status
       )
     });
-    let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-    std::fs::write(&result_path, body).map_err(|e| e.to_string())?;
-    return Ok(result_path.display().to_string());
+    return write_json_artifact(&project, "autofix.execution.result.json", &payload);
   }
 
   let main_dart = project_dir.join("lib").join("main.dart");
@@ -861,9 +859,7 @@ fn execute_autofix_patch(project: String) -> Result<String, String> {
     "sourceArtifact": "autofix.execution.json"
   });
 
-  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-  std::fs::write(&result_path, body).map_err(|e| e.to_string())?;
-  Ok(result_path.display().to_string())
+  write_json_artifact(&project, "autofix.execution.result.json", &payload)
 }
 
 
@@ -909,9 +905,7 @@ fn evaluate_autofix_execution(project: String) -> Result<String, String> {
     "reason": reason
   });
 
-  let body = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-  std::fs::write(&execution_path, body).map_err(|e| e.to_string())?;
-  Ok(execution_path.display().to_string())
+  write_json_artifact(&project, "autofix.execution.json", &payload)
 }
 
 
