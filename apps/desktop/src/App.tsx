@@ -382,6 +382,47 @@ export default function App() {
   }, [project, e2eCurrentRun, e2eRerun]);
 
 
+  const groupedCurrentArtifacts = useMemo(() => {
+    const artifactNames = [
+      "autofix.json",
+      "autofix.apply.json",
+      "autofix.patch.json",
+      "autofix.result.json",
+      "autofix.retry.json",
+      "autofix.retry.run.json",
+      "autofix.selfheal.json",
+      "autofix.approval.json",
+      "autofix.execution.json",
+      "autofix.execution.result.json",
+      "autofix.rerun.json",
+      "autofix.continue.json",
+    ];
+
+    const groups: Array<{ title: string; items: string[] }> = [];
+
+    const approvalItems = artifactNames.filter((item) => item.includes("approval"));
+    const continueItems = artifactNames.filter((item) => item.includes("continue"));
+    const executionItems = artifactNames.filter(
+      (item) => item.includes("execution") && !item.includes("continue")
+    );
+    const rerunItems = artifactNames.filter((item) => item.includes("rerun"));
+    const otherItems = artifactNames.filter(
+      (item) =>
+        !approvalItems.includes(item) &&
+        !continueItems.includes(item) &&
+        !executionItems.includes(item) &&
+        !rerunItems.includes(item)
+    );
+
+    if (approvalItems.length) groups.push({ title: "Approval", items: approvalItems });
+    if (continueItems.length) groups.push({ title: "Continue", items: continueItems });
+    if (executionItems.length) groups.push({ title: "Execution", items: executionItems });
+    if (rerunItems.length) groups.push({ title: "Rerun", items: rerunItems });
+    if (otherItems.length) groups.push({ title: "Other", items: otherItems });
+
+    return groups;
+  }, []);
+
   const groupedRunHistoryArtifacts = useMemo(() => {
     const groups: Array<{ title: string; items: string[] }> = [];
 
@@ -1459,42 +1500,38 @@ export default function App() {
               Artifact Inspector
             </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {[
-                "autofix.json",
-                "autofix.apply.json",
-                "autofix.patch.json",
-                "autofix.result.json",
-                "autofix.retry.json",
-                "autofix.retry.run.json",
-                "autofix.selfheal.json",
-                "autofix.approval.json",
-                "autofix.execution.json",
-                "autofix.execution.result.json",
-                "autofix.rerun.json",
-                "autofix.continue.json",
-              ].map((name) => {
-                const hasData = !!artifactMap[name];
-                const selected = selectedArtifact === name;
-                return (
-                  <button
-                    key={name}
-                    onClick={() => setSelectedArtifact(name)}
-                    style={{
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: selected ? "1px solid #fff" : "1px solid #333",
-                      background: selected ? "#fff" : hasData ? "#1a1a1a" : "#111",
-                      color: selected ? "#000" : hasData ? "#fff" : "#666",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {name}
-                  </button>
-                );
-              })}
+            <div style={{ display: "grid", gap: 10 }}>
+              {groupedCurrentArtifacts.map((group) => (
+                <div key={group.title} style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: "#aaa", fontWeight: 700 }}>
+                    {group.title}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {group.items.map((name) => {
+                      const hasData = !!artifactMap[name];
+                      const selected = selectedArtifact === name;
+                      return (
+                        <button
+                          key={name}
+                          onClick={() => setSelectedArtifact(name)}
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: selected ? "1px solid #fff" : "1px solid #333",
+                            background: selected ? "#fff" : hasData ? "#1a1a1a" : "#111",
+                            color: selected ? "#000" : hasData ? "#fff" : "#666",
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <textarea
