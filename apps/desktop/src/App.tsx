@@ -630,6 +630,13 @@ export default function App() {
       const nextMap: Record<string, string> = Object.fromEntries(entries);
       setArtifactMap(nextMap);
 
+      const firstAvailableArtifact =
+        Object.keys(nextMap).find((name) => nextMap[name]?.trim().length > 0) ?? null;
+
+      if (firstAvailableArtifact) {
+        setSelectedArtifact(firstAvailableArtifact);
+      }
+
       const selfHealRaw = nextMap["autofix.selfheal.json"] ?? "";
       const retryRunRaw = nextMap["autofix.retry.run.json"] ?? "";
       const approvalRaw = nextMap["autofix.approval.json"] ?? "";
